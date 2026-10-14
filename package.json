@@ -1,0 +1,32 @@
+{
+  "name": "manxin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "慢信：從前慢，如今也慢。",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @manxin/api",
+    "worker": "npm run worker -w @manxin/api",
+    "test": "npm run test -w @manxin/engine && npm run test -w @manxin/api",
+    "test:engine": "npm run test -w @manxin/engine",
+    "test:api": "npm run test -w @manxin/api",
+    "typecheck": "tsc -p packages/engine && tsc -p packages/shared && tsc -p apps/api",
+    "db:up": "docker compose up -d postgres",
+    "db:generate": "npm run db:generate -w @manxin/api",
+    "db:migrate": "npm run db:migrate -w @manxin/api",
+    "db:seed": "npm run db:seed -w @manxin/api"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4",
+    "tsx": "^4.23.15",
+    "@types/node": "^24"
+  }
+}

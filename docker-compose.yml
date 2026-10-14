@@ -1,0 +1,21 @@
+# 開發用資料庫。啟動：npm run db:up（或 docker compose up -d）
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: manxin-postgres
+    environment:
+      POSTGRES_USER: manxin
+      POSTGRES_PASSWORD: manxin
+      POSTGRES_DB: manxin
+      TZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - manxin-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U manxin -d manxin"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  manxin-pg:

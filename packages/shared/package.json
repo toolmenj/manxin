@@ -1,0 +1,16 @@
+{
+  "name": "@manxin/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "慢信前後端共用型別。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@manxin/engine": "0.1.0"
+  }
+}

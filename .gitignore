@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.local
+uploads/
+apps/api/uploads/
+coverage/
+dist/
+*.log
+.pglite/

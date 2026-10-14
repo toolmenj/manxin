@@ -1,0 +1,20 @@
+{
+  "name": "@manxin/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "慢信物流時間引擎：純函式，不讀時鐘、不打網路。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "luxon": "^3.7.2"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.6"
+  }
+}
