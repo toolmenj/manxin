@@ -29,6 +29,7 @@ describe('開信流程', () => {
     const g = json(await t.req('GET', `/r/${token}`));
     expect(g.recv.entered).toBe(false);
     expect(g.letter).toBeNull();
+    expect(g.attachments).toBeNull();
     expect(g.pkg.folds).toHaveLength(2);
     expect(json(await t.req('POST', `/r/${token}/open`, undefined, { method: 'knife' })).error.details.reason).toBe('NOT_ENTERED');
 
@@ -86,6 +87,75 @@ describe('開信流程', () => {
     const p = json(await t.req('POST', `/r/${token}/pieces`, undefined, { pieces: [{ k: 'lL', x: 10, y: 20, rot: 3 }] }));
     expect(p.recv.pieces.find((x: { k: string }) => x.k === 'lL')).toEqual({ k: 'lL', x: 10, y: 20, rot: 3 });
     expect((await t.req('POST', `/r/${token}/tear`, undefined, { x: 2 })).statusCode).toBe(400);
+  });
+
+  it('送達後，寄件人看得到「送達時間怎麼算的」計算明細', async () => {
+    const { no } = await delivered('看計算明細');
+    const s = json(await t.req('GET', `/shipments/${no}`, me));
+    expect(s.state).toBe('waiting');
+    expect(s.calc).not.toBeNull();
+    expect(s.calc.deliver).toBe(s.deliverAt);
+    expect(s.calc.start).toBeLessThanOrEqual(s.calc.raw);
+    expect(s.calc.base).toBeGreaterThanOrEqual(1);
+    expect(typeof s.calc.baseWhy).toBe('string');
+  });
+
+  it('信封外面上傳的郵票，拆信前就看得到；信封裡的附件要倒出來之後', async () => {
+    const id = await draft(t, me, '附上一張照片，還有自己畫的郵票');
+    const png = Buffer.from('89504e470d0a1a0a', 'hex');
+    const up = async (purpose: string) => {
+      const boundary = '----manxin';
+      const payload = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n`),
+        png,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      const r = await t.app.inject({
+        method: 'POST',
+        url: `/letters/${id}/attachments?purpose=${purpose}`,
+        headers: { cookie: me, 'content-type': `multipart/form-data; boundary=${boundary}` },
+        payload,
+      });
+      expect(r.statusCode, r.body).toBe(201);
+      return json(r).id as string;
+    };
+    const att = await up('attachment');
+    await t.req('POST', `/letters/${id}/trip`, me, { place: 'box', mode: 'walk', box: 'green' });
+    t.advance(10 * 60_000);
+    await t.req('POST', `/letters/${id}/trip/enter`, me);
+    const stampId = await up('stamp');
+    expect(json(await t.req('PATCH', `/letters/${id}/counter`, me, { stampAttachmentId: stampId })).stampAttachmentId).toBe(stampId);
+    for (const [u, b] of [
+      [`/letters/${id}/counter/confirm-address`],
+      [`/letters/${id}/counter/folds`, { edge: 'b', at: (1.414 * 2) / 3 }],
+      [`/letters/${id}/counter/folds`, { edge: 'b', at: 1.414 / 3 }],
+      [`/letters/${id}/counter/insert`],
+      [`/letters/${id}/counter/seal`],
+      [`/letters/${id}/counter/stamp`, { x: 0.87, y: 0.24, r: 3 }],
+    ] as [string, unknown?][]) {
+      const r = await t.req('POST', u, me, b);
+      expect(r.statusCode, u + r.body).toBeLessThan(300);
+    }
+    const no = json(await t.req('POST', `/letters/${id}/post`, me)).no as string;
+    const s = (await t.h.db.select().from(shipments).where(eq(shipments.no, no)))[0]!;
+    t.setNow(s.deliverAt.getTime());
+    await t.run();
+    const m = (await t.outbox('wen@example.org')).find((x) => (x.meta as { no: string }).no === no)!;
+    const token = (m.meta as { token: string }).token;
+    expect(json(await t.req('GET', `/r/${token}`)).pkg.stampAttachmentId).toBe(stampId);
+    const st = await t.req('GET', `/r/${token}/attachments/${stampId}`);
+    expect(st.statusCode).toBe(200);
+    expect(st.rawPayload.equals(png)).toBe(true);
+    expect(json(await t.req('GET', `/r/${token}/attachments/${att}`)).error.code).toBe('INVALID_STATE');
+    await t.req('POST', `/r/${token}/enter`);
+    await t.req('POST', `/r/${token}/open`, undefined, { method: 'knife' });
+    await t.req('POST', `/r/${token}/pour`);
+    expect((await t.req('GET', `/r/${token}/attachments/${att}`)).statusCode).toBe(200);
+    // 倒出來就列出附件，信紙還摺著
+    const g = json(await t.req('GET', `/r/${token}`));
+    expect(g.letter).toBeNull();
+    expect(g.attachments.map((a: { id: string }) => a.id)).toEqual([att]);
+    expect(g.attachments[0].url).toBe(`/r/${token}/attachments/${att}`);
   });
 
   it('無效連結 404', async () => {

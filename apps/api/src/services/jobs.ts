@@ -137,7 +137,7 @@ const handlers: Record<JobKind, Handler> = {
     const env = L.env as EnvAddress;
     const m = unsentAskMail({ toName: env.toName, shelvedAt: p.shelvedAt, days: Math.floor((now - p.shelvedAt) / D), deskLink: `${ctx.cfg.appUrl}/tomb` });
     const sent = await ctx.mailer.send({ to: u.email, ...m, idempotencyKey: job.uniqueKey, meta: { kind: 'unsent_ask', letterId: L.id } }, db, now);
-    await db.update(letters).set({ askedAt: new Date(now) }).where(eq(letters.id, L.id));
+    // 不動 askedAt：askedAt 只記使用者在畫面上按「再放 30 天」。寄了信之後書桌上的詢問仍然要出現，直到使用者回應
     await enqueue(db, { kind: 'unsent_ask', uniqueKey: nextKey, refId: L.id, runAt: now + UNSENT_ASK_EVERY, payload: { ...p, n: p.n + 1 }, now });
     return sent ? 'sent' : 'skipped:already-sent';
   },

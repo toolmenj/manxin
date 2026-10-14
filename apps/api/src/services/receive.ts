@@ -47,21 +47,26 @@ async function receiveDTO(ctx: Ctx, db: Db, s: ShipmentRow, token: string): Prom
   const env = s.env as EnvAddress;
   const pkg = s.pkg as Pkg;
   let letter: ReceiveDTO['letter'] = null;
-  if (recv.unfolded) {
-    const sh = await currentSheet(db, s.letterId);
-    const atts = await db
+  let atts: ReceiveDTO['attachments'] = null;
+  if (recv.poured) {
+    // 倒出來就看得到附件（原型：附件和摺著的信紙一起倒出來）
+    const rows = await db
       .select()
       .from(attachments)
       .where(and(eq(attachments.letterId, s.letterId), eq(attachments.purpose, 'attachment'), isNull(attachments.takenOutAt)));
+    atts = rows.map((a) => attachmentDTO(a, `/r/${token}/attachments/${a.id}`));
+  }
+  if (recv.unfolded) {
+    const sh = await currentSheet(db, s.letterId);
     const L = (await db.query.letters.findFirst({ where: (l, { eq }) => eq(l.id, s.letterId) }))!;
     letter = {
       sheet: await sheetDTO(db, sh),
-      attachments: atts.map((a) => attachmentDTO(a, `/r/${token}/attachments/${a.id}`)),
+      attachments: atts ?? [],
       frontAttachmentId: L.frontAttachmentId,
     };
   }
   const { efont: _f, ...pk } = pkg;
-  return { no: s.no, fromName: env.fromName, office: s.office, sentAt: s.sentAt.getTime(), pkg: pk, recv, letter };
+  return { no: s.no, fromName: env.fromName, office: s.office, sentAt: s.sentAt.getTime(), pkg: pk, recv, letter, attachments: atts };
 }
 
 /** 收件人目前看得到這封信嗎：送達（或重新投遞）後、未退回 */
@@ -163,13 +168,14 @@ export async function receiveAction(ctx: Ctx, token: string, a: RecvAction): Pro
 export async function recipientAttachment(ctx: Ctx, token: string, attId: string) {
   const s = await byToken(ctx.db, token);
   assertOpenable(ctx, s, await editsOf(ctx.db, s.id));
-  if (!(s.recv as RecvState).poured) fail(409, 'INVALID_STATE', '附件還在信封裡');
   const rows = await ctx.db
     .select()
     .from(attachments)
     .where(and(eq(attachments.id, attId), eq(attachments.letterId, s.letterId)));
   const a = rows[0];
   if (!a || !['attachment', 'front', 'bg', 'scan', 'stamp', 'postmark', 'skin'].includes(a.purpose)) fail(404, 'NOT_FOUND', '找不到這個檔案');
+  // 信封外面看得到的（上傳的郵票、郵戳、信封圖）一開始就能看；信封裡的東西要倒出來之後
+  if (!['stamp', 'postmark', 'skin'].includes(a!.purpose) && !(s.recv as RecvState).poured) fail(409, 'INVALID_STATE', '附件還在信封裡');
   return a!;
 }
 

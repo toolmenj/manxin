@@ -147,6 +147,7 @@ describe('櫃台', () => {
     expect(isValidTrackNo(s.no)).toBe(true);
     expect(s.state).toBe('transit');
     expect(s.deliverAt).toBeNull(); // 送達前不透露確切時間
+    expect(s.calc).toBeNull(); // 計算明細也一樣，送達後才給
     expect(s.stops[0]).toBe('臺北大安區 巷口郵筒');
     expect(json(await t.req('GET', `/letters/${id}`, me)).status).toBe('sent');
     expect((await t.req('POST', `/letters/${id}/post`, me)).statusCode).toBe(409);

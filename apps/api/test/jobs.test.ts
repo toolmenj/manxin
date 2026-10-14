@@ -157,6 +157,8 @@ describe('未寄出的信：每 30 天詢問', () => {
     expect(await asks()).toHaveLength(1);
     expect((await asks())[0]!.text).toContain('已經放了 30 天');
     expect(await t.run()).toEqual([]);
+    // 寄了詢問信，書桌上的「現在想寄出了嗎？」還是要出現，直到使用者按「再放 30 天」或拿出來
+    expect(json(await t.req('GET', `/letters/${id}`, me)).askDue).toBe(true);
 
     t.advance(30 * D);
     expect((await t.run()).map((x) => x.result)).toEqual(['sent']);
@@ -175,6 +177,7 @@ describe('未寄出的信：每 30 天詢問', () => {
     await t.req('POST', `/letters/${id}/shelve`, me);
     t.advance(20 * D);
     await t.req('POST', `/letters/${id}/ask-later`, me);
+    expect(json(await t.req('GET', `/letters/${id}`, me)).askDue).toBe(false);
     t.advance(10 * D);
     expect((await t.run()).map((x) => x.result)).toEqual(['skipped:snoozed']);
     t.advance(20 * D);

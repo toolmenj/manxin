@@ -217,6 +217,23 @@ export interface CounterDTO {
 
 /* ---------- 物流 ---------- */
 
+/** 送達時間怎麼算的（原型追蹤頁的「計算明細」）。D-020：送達之前不透露，所以送達前是 null */
+export interface ShipmentCalcDTO {
+  /** 交寄後最近的發車班次 */
+  start: number;
+  /** 基礎天數與理由 */
+  base: number;
+  baseWhy: string;
+  /** 48 小時內的隨機延遲（毫秒） */
+  randDelay: number;
+  /** 天氣延遲（毫秒） */
+  wDelay: number;
+  /** 原始到達時間（還沒推到上班時間） */
+  raw: number;
+  /** 實際送達（推到上班時間後） */
+  deliver: number;
+}
+
 export interface ShipmentDTO {
   no: string;
   letterId: string;
@@ -236,6 +253,8 @@ export interface ShipmentDTO {
   returnedAt: number | null;
   returnPostmark: ReturnPostmark | null;
   env: EnvAddress;
+  /** 送達後才有 */
+  calc: ShipmentCalcDTO | null;
 }
 
 export interface TrackDTO {
@@ -258,6 +277,8 @@ export interface ReceiveDTO {
   recv: RecvState;
   /** 攤開（或撕破）之後才有內容 */
   letter: { sheet: SheetDTO; attachments: AttachmentDTO[]; frontAttachmentId: string | null } | null;
+  /** 倒出來之後就看得到附件（信紙還摺著也一樣） */
+  attachments: AttachmentDTO[] | null;
 }
 
 /* ---------- 收藏 ---------- */

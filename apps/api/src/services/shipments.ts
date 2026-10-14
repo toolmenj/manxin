@@ -145,6 +145,11 @@ export async function shipmentDTO(ctx: Ctx, s: ShipmentRow, db: Db = ctx.db): Pr
     returnedAt: st.state === 'returned' ? st.ret : null,
     returnPostmark: st.state === 'returned' ? returnPostmark(P.dest, st.ret) : null,
     env: s.env as EnvAddress,
+    // 計算明細跟送達時間一樣，送達之後才給（D-020）
+    calc:
+      now >= P.deliver
+        ? { start: P.start, base: P.base, baseWhy: P.baseWhy, randDelay: P.randDelay, wDelay: P.wDelay, raw: P.raw, deliver: P.deliver }
+        : null,
   };
 }
 

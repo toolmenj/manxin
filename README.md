@@ -13,9 +13,10 @@
 
 這個專案還在開發中：
 
-- `prototype/index.html`：單檔、可完整操作的前端原型，資料只存在瀏覽器。
+- `prototype/index.html`：單檔、可完整操作的前端原型，資料只存在瀏覽器。畫面與互動以它為準。
+- `apps/web`：正式前端（Vite + React + TypeScript），從原型移植，資料全部走後端 API。
 - `apps/api`、`packages/*`：後端第一版，有 API、資料庫、排程和測試。
-- 前端還沒接上後端 API。
+- 登入 → 寫信 → 郵局 → 寄出 → 快轉 → 收信開信，已經可以從頭走到尾（有端到端測試）。
 
 ## 看原型
 
@@ -23,29 +24,31 @@
 
 原型裡有三種年代風格（八〇年代、民國初年、手繪塗鴉）和三種書桌（木桌配綠檯燈、白桌配長燈帶、課桌）。打字機可以選鍵盤輸入、台灣中文打字機（繁體字盤），或中國中文打字機（簡體字盤）。右上角的「快轉」可以讓時間往前走，用來看送達、提醒和退信。
 
-## 在本機跑後端
+## 在本機跑
 
-需要 Node 24。有 Docker 的話用 PostgreSQL 16；沒有的話也能用記憶體資料庫（PGlite）。
+需要 Node 24。沒有 Docker 也可以：後端改用記憶體資料庫（PGlite，每次啟動都是乾淨的範例資料，關掉就消失）。
 
 ```bash
 npm install
+
+# 前後端一起起來（後端 PGlite）：前端 http://localhost:5173、API http://127.0.0.1:3000
+npm run dev:all:pglite
+
+# 分開起
+npm run dev:api:pglite   # 只有後端（PGlite）
+npm run dev:web          # 只有前端（/api 會轉給 127.0.0.1:3000）
+
+# 有 Docker 的 PostgreSQL 16
 cp .env.example .env
-
-# 有 Docker
-npm run db:up
-npm run db:migrate
-npm run db:seed
-npm run dev          # http://127.0.0.1:3000
-
-# 沒有 Docker：在 .env 加一行 DB_DRIVER=pglite，然後
-npm run dev
+npm run db:up && npm run db:migrate && npm run db:seed
+npm run dev:all
 ```
 
-- 開發階段不會真的寄 email。登入連結和開信連結都在 `GET /dev/outbox` 看。
-- 範例帳號：`zhe@example.com`（寄件人）、`wen@example.org`（收件人）。
-- 想讓時間往前走：`POST /dev/clock`，內容 `{"advanceMs":86400000}` 代表前進一天。
+- 打開 http://localhost:5173 ，按右上角「快轉」→「登入」，用 `zhe@example.com`（寄件人）或 `wen@example.org`（收件人）登入。
+- 開發階段不會真的寄 email。登入連結、開信通知、提醒、退信都在前端的「本機信箱」頁（`/mailbox`，在「快轉」選單裡），連結可以直接點；也可以看 `GET /dev/outbox`。
+- 右上角「快轉」會讓伺服器的時鐘往前走（`POST /dev/clock`），用來看路程、送達、提醒和退信。
 
-更多細節見 [apps/api/README.md](apps/api/README.md)。
+更多細節見 [apps/web/README.md](apps/web/README.md)、[apps/api/README.md](apps/api/README.md)。
 
 ## 測試
 

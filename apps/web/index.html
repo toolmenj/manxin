@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-Hant-TW" data-era="80s" data-desk="wood">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>慢信</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC:wght@400;700&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@400;600;900&family=Noto+Serif+SC:wght@400;600&family=Cactus+Classical+Serif&family=DotGothic16&family=Iansui&family=Special+Elite&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<!-- 原型的共用 SVG 濾鏡（揉紙、攤開、墨跡） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="crumple"><feTurbulence type="fractalNoise" baseFrequency=".045" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="16"/></filter>
+  <filter id="unfold"><feTurbulence type="fractalNoise" baseFrequency=".03" numOctaves="2" seed="11"/><feDisplacementMap id="unfoldMap" in="SourceGraphic" scale="46"/></filter>
+  <filter id="inky"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="1" seed="3" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.6"/></filter>
+</svg>
+<div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

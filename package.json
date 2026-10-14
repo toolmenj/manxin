@@ -13,20 +13,30 @@
   },
   "scripts": {
     "dev": "npm run dev -w @manxin/api",
+    "dev:api": "npm run dev -w @manxin/api",
+    "dev:web": "npm run dev -w @manxin/web",
+    "dev:all": "concurrently -k -n api,web -c green,yellow \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:all:pglite": "concurrently -k -n api,web -c green,yellow \"npm:dev:api:pglite\" \"npm:dev:web\"",
+    "dev:api:pglite": "cross-env DB_DRIVER=pglite npm run dev -w @manxin/api",
     "worker": "npm run worker -w @manxin/api",
-    "test": "npm run test -w @manxin/engine && npm run test -w @manxin/api",
+    "test": "npm run test -w @manxin/engine && npm run test -w @manxin/api && npm run test -w @manxin/web",
     "test:engine": "npm run test -w @manxin/engine",
     "test:api": "npm run test -w @manxin/api",
-    "typecheck": "tsc -p packages/engine && tsc -p packages/shared && tsc -p apps/api",
+    "typecheck": "tsc -p packages/engine && tsc -p packages/shared && tsc -p apps/api && tsc -p apps/web",
     "db:up": "docker compose up -d postgres",
     "db:generate": "npm run db:generate -w @manxin/api",
     "db:migrate": "npm run db:migrate -w @manxin/api",
-    "db:seed": "npm run db:seed -w @manxin/api"
+    "db:seed": "npm run db:seed -w @manxin/api",
+    "test:web": "npm run test -w @manxin/web",
+    "test:e2e": "npm run test:e2e -w @manxin/web",
+    "build:web": "npm run build -w @manxin/web"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
     "vitest": "^5.0.4",
     "tsx": "^4.23.15",
-    "@types/node": "^24"
+    "@types/node": "^24",
+    "concurrently": "^10.0.6",
+    "cross-env": "^10.1.0"
   }
 }
