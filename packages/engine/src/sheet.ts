@@ -113,13 +113,13 @@ export const POSTCARD_BODY_X = 0.55;
  * 各種紙的可寫區域。數字要跟前端 paper.ts 的 GRID_CSS（版面的 cqw）對得上：
  * - 信紙（橫線、空白、自訂圖樣）：內文寬 84cqw，27 字 × 22 行
  * - 稿紙：16 × 20 格
- * - 八行箋：8 直行（可往左捲到 40 行），一行 20 字
+ * - 八行箋：剛好 8 直行，一行 20 字（2026-10-21 使用者決定，不再往左捲）
  * - 明信片：只有左邊 52%（46.8cqw）的正文區，18 字 × 12 行；右半邊不在可寫區域
  */
 export function paperGrid(p: PaperRef): PaperGrid {
   if (p.kind === 'postcard') return { units: 36, rows: 12, maxRows: 12, vertical: false, half: true };
   if (p.style === 'grid') return { units: 32, rows: 20, maxRows: 20, vertical: false, half: false };
-  if (p.style === 'bahang') return { units: 40, rows: 8, maxRows: 40, vertical: true, half: false };
+  if (p.style === 'bahang') return { units: 40, rows: 8, maxRows: 8, vertical: true, half: false };
   return { units: 54, rows: 22, maxRows: 22, vertical: false, half: true };
 }
 
