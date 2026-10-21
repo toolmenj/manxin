@@ -5,7 +5,8 @@
   "type": "module",
   "description": "慢信物流時間引擎：純函式，不讀時鐘、不打網路。",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sheet": "./src/sheet.ts"
   },
   "scripts": {
     "test": "vitest run",

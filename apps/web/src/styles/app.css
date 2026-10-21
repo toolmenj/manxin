@@ -8,3 +8,73 @@
 .mailbox .search input{flex:1 1 240px;min-width:0}
 .mailbox .mail-text{white-space:pre-wrap;word-break:break-all}
 .mail-link{color:var(--post);text-decoration:underline;word-break:break-all}
+
+/* ===== 拼音鍵盤（簡體）：鍵帽只印字母，鍵盤上方一條候選字紙條 ===== */
+:root[data-twmode="py"] .k .zy,:root[data-twmode="py"] .k .rad{display:none}
+:root[data-twmode="py"] .k small{display:block;position:static;font:600 calc(var(--k) * .4)/1 var(--ui);opacity:1;letter-spacing:0}
+:root[data-twmode="py"] .k.wide small{font-size:calc(var(--k) * .3)}
+.tw-py{display:none}
+:root[data-twmode="py"] .tw-py{display:flex;align-items:stretch;gap:6px;position:relative;z-index:1;margin:0 auto calc(var(--g) * 1.6);width:min(100%,calc(var(--k) * 11));height:calc(var(--k) * 1.05);padding:4px 6px;border-radius:4px;
+  background:linear-gradient(#FBF6E6,#EDE2C2);color:#1d1a15;box-shadow:inset 0 0 0 1px rgba(80,60,20,.35),0 2px 0 rgba(0,0,0,.45),0 4px 6px rgba(0,0,0,.35);transform:rotate(-.4deg)}
+.py-buf{flex:0 0 22%;display:flex;align-items:center;padding:0 6px;border-right:1px dashed rgba(80,60,20,.4);font:500 calc(var(--k) * .36)/1 'IBM Plex Mono',monospace;letter-spacing:.04em;color:#7A2E1F;overflow:hidden;white-space:nowrap}
+.py-buf:empty::before{content:"打拼音";font:400 calc(var(--k) * .26)/1 var(--ui);color:#9A8B66;letter-spacing:.1em}
+.py-cands{flex:1;display:grid;grid-template-columns:repeat(8,1fr)}
+.py-cands i{position:relative;display:grid;place-items:center;font:normal 400 calc(var(--k) * .5)/1 'Noto Serif SC','Noto Serif TC',serif;padding-top:calc(var(--k) * .14);cursor:pointer;border-radius:3px}
+.py-cands i:empty{cursor:default}
+.py-cands i:not(:empty)::before{content:attr(data-n);position:absolute;top:2px;left:0;right:0;text-align:center;font:500 calc(var(--k) * .17)/1 var(--ui);color:#8A6A2E}
+.py-cands i:first-child:not(:empty){background:rgba(176,58,46,.1);box-shadow:inset 0 -2px 0 var(--seal)}
+.py-cands i:not(:empty):hover{background:rgba(80,60,20,.08)}
+.py-pg{flex:0 0 auto;display:flex;align-items:center;font:500 calc(var(--k) * .22)/1 var(--ui);color:#8A6A2E;min-width:2.4em;justify-content:center}
+:root[data-era="minguo"][data-twmode="py"] .tw-eye{display:none}
+:root[data-era="minguo"][data-twmode="py"] .tw-py{position:absolute;left:50%;top:calc(var(--k) * .42);transform:translateX(-50%) rotate(-.3deg);width:min(86%,calc(var(--k) * 10));height:calc(var(--k) * 1.45);margin:0}
+
+/* ===== 郵筒（依年代）：投信口、取信門、晃一下；寄出後「郵差來收信」的過場（lib/postbox.ts、scenes.ts postScene） ===== */
+.pbx-host{display:flex;justify-content:center;padding-top:16px}
+.pbx{background:var(--pb,#1E6A4A);transform-origin:50% 100%;margin-bottom:8px}
+.pbx .slit{z-index:1;perspective:200px}
+.pbx .pb-lip{position:absolute;left:-5px;right:-5px;top:-7px;height:7px;border-radius:4px 4px 1px 1px;background:var(--pb,#1E6A4A);filter:brightness(.78);box-shadow:0 2px 2px rgba(0,0,0,.35);transform-origin:50% 0}
+.pbx .pb-sub{position:absolute;left:0;right:0;top:90px;text-align:center;color:#FFF8E6;font:12px var(--ui);letter-spacing:.4em;opacity:.8}
+.pbx .pb-door{position:absolute;left:22px;right:22px;bottom:12px;height:30px;border-radius:3px;background:var(--pb,#1E6A4A);box-shadow:inset 0 0 0 2px rgba(0,0,0,.22),inset 0 -5px 0 rgba(0,0,0,.08);transform-origin:0 50%;backface-visibility:hidden}
+.pbx .pb-door i{position:absolute;right:7px;top:50%;width:5px;height:8px;margin-top:-4px;border-radius:2px;background:#2A241C}
+.pbx .pb-foot{position:absolute;left:-7px;right:-7px;bottom:-8px;height:10px;border-radius:2px;background:#3A342B;box-shadow:0 3px 4px rgba(0,0,0,.35)}
+/* 民國初年：圓柱信筒，帽蓋、鐵箍、直書 */
+.pbx.pb-minguo{width:96px;height:160px;margin-top:14px;border-radius:8px 8px 3px 3px;background:linear-gradient(90deg,rgba(0,0,0,.3),rgba(255,255,255,.13) 28%,rgba(0,0,0,0) 50%,rgba(0,0,0,.38)),var(--pb)}
+.pb-minguo::before,.pb-minguo::after{content:"";position:absolute;left:0;right:0;height:5px;background:rgba(0,0,0,.28);box-shadow:0 1px 0 rgba(255,255,255,.12)}
+.pb-minguo::before{top:46px}.pb-minguo::after{bottom:46px}
+.pb-minguo .pb-cap{position:absolute;left:-9px;right:-9px;top:-17px;height:26px;border-radius:50% 50% 5px 5px/100% 100% 5px 5px;background:linear-gradient(90deg,rgba(0,0,0,.32),rgba(255,255,255,.16) 34%,rgba(0,0,0,.38)),var(--pb);box-shadow:0 3px 3px rgba(0,0,0,.4)}
+.pb-minguo .slit{left:16px;right:16px;top:24px;height:8px}
+.pb-minguo .pb-lip{left:-3px;right:-3px;top:-5px;height:5px}
+.pb-minguo .t{left:50%;right:auto;top:56px;transform:translateX(-50%);writing-mode:vertical-rl;font:700 15px var(--display);letter-spacing:.3em;padding:5px 2px;border:1.5px solid rgba(255,240,210,.65);color:#F6E7C8}
+.pb-minguo .pb-door{left:20px;right:20px;bottom:10px;height:24px}
+.pb-minguo .pb-foot{left:-10px;right:-10px;height:12px;background:#2A2620}
+/* 手繪塗鴉：粗黑歪線、斜線陰影 */
+.pbx.pb-doodle{border:3px solid #1B140E;border-radius:30px 24px 6px 9px/26px 32px 5px 8px;box-shadow:4px 5px 0 rgba(0,0,0,.45);background:repeating-linear-gradient(-55deg,transparent 0 7px,rgba(0,0,0,.13) 7px 9px),var(--pb);rotate:-1.5deg}
+.pb-doodle .slit{border-radius:7px 4px 6px 3px;background:#120D08;transform:rotate(1.2deg)}
+.pb-doodle .pb-lip{background:#1B140E;filter:none;border-radius:6px 3px 2px 4px}
+.pb-doodle .t{font:700 20px var(--hand);rotate:-2deg}
+.pb-doodle .pb-sub{display:none}
+.pb-doodle .pb-door{border:2px solid #1B140E;box-shadow:none;border-radius:4px 6px 3px 5px}
+.pb-doodle .pb-foot{background:#1B140E;border-radius:3px 7px 2px 5px}
+
+.scene .pb-stage{position:absolute;left:0;right:0;bottom:14%;margin:auto;width:min(340px,calc(100vw - 32px));height:280px}
+.scene .pb-stage .pbx{position:absolute;left:22%;bottom:22px;margin-left:-60px;scale:1.45}
+.scene .pb-stage .pbx.pb-minguo{margin-left:-48px}
+/* 做過但未使用（2026-10-21 改成註解保留）：只給已註解掉的 sendScene（scenes.ts 的 intoBox，全自動寄信最後投郵筒）用
+   .scene .pb-stage.pb-solo{bottom:-8px}
+   .scene .pb-stage.pb-solo .pbx{left:50%} */
+.pb-bag{position:absolute;right:4%;bottom:12px;width:116px;height:124px;opacity:0;transform-origin:50% 100%}
+.pb-bag-in{position:absolute;inset:0;border-radius:18px 18px 34px 34px/12px 12px 40px 40px;background:radial-gradient(ellipse at 40% 30%,rgba(255,255,255,.12),transparent 60%),#5E6B45;box-shadow:inset -10px -8px 0 rgba(0,0,0,.18),0 8px 12px rgba(0,0,0,.35);display:grid;place-items:center}
+.pb-bag-in::before{content:"";position:absolute;left:8px;right:8px;top:-4px;height:12px;border-radius:6px;background:#3E4630;box-shadow:inset 0 3px 3px rgba(0,0,0,.4)}
+.pb-bag-in span{font:700 18px var(--display);letter-spacing:.3em;color:rgba(255,248,230,.82)}
+.pb-bag-minguo{background:repeating-linear-gradient(0deg,transparent 0 3px,rgba(0,0,0,.08) 3px 4px),repeating-linear-gradient(90deg,transparent 0 3px,rgba(0,0,0,.08) 3px 4px),#9C8358}
+.pb-bag-minguo::before{background:#6B5434}
+.pb-bag-minguo span{width:40px;height:40px;display:grid;place-items:center;border:2px solid #A23A2C;color:#A23A2C;letter-spacing:0;font-size:22px}
+.pb-bag-doodle{border:3px solid #1B140E;background:repeating-linear-gradient(-55deg,transparent 0 7px,rgba(0,0,0,.13) 7px 9px),#7C8A57}
+.pb-bag-doodle span{font-family:var(--hand)}
+.pb-mail{position:absolute;width:46px;height:28px;border-radius:2px;background:#F3EAD3;box-shadow:0 2px 4px rgba(0,0,0,.35);opacity:0;z-index:2}
+.pb-mail.ours{background:var(--kraft,#D9C29A)}
+.pb-mail.ours::after{content:"";position:absolute;right:4px;top:4px;width:8px;height:10px;background:#B03A2E;outline:1px dashed #F3EAD3;outline-offset:-2px}
+/* 收信過場：背景壓暗一點，免得和底下櫃台的郵筒疊在一起看成兩個 */
+.scene:has(.pb-stage){background:radial-gradient(ellipse 80% 70% at 50% 42%,rgba(40,28,12,.62),rgba(10,7,3,.95) 78%)}
+/* 「略過」在每個年代都要看得到（民國的 .btn 是透明底，疊在暗色場景上幾乎看不見） */
+.scene .btn.skip{background:rgba(255,250,236,.9);color:#2A2620;border-color:rgba(42,38,32,.6);z-index:5}

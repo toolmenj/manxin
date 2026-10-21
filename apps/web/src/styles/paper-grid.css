@@ -1,0 +1,21 @@
+/*
+ * 格位排版（移動過打字頭的信紙，見 lib/paper.ts renderGrid）。
+ * 一行一個 .gl；字（.c）與空格（.gs）都是固定寬度的 inline-block，寬度＝半格（--uw）× 佔幾個半格（--w）。
+ * 用邏輯屬性（inline-size／block-size），八行箋的 writing-mode: vertical-rl 會自動變成直行、由右往左。
+ * --uw、--lh、--gfs 由 JS 依紙種設定（paper.ts 的 GRID_CSS），不吃 .paper 的 px 下限，格子才會跟紙一起縮放。
+ */
+.paper .type-layer.gridded{font-size:var(--gfs);line-height:var(--lh);white-space:nowrap;word-break:normal;overflow-wrap:normal}
+.paper .type-layer.gridded .gl{display:block;block-size:var(--lh);white-space:nowrap}
+.paper .type-layer.gridded .gl > .c,
+.paper .type-layer.gridded .gl > .gs{display:inline-block;width:auto;height:auto;inline-size:calc(var(--uw) * var(--w, 2));block-size:var(--lh);vertical-align:top;text-align:center;letter-spacing:0}
+.paper[data-style="bahang"] .type-layer.gridded .c{text-orientation:upright}
+
+/* 打字頭：一格寬的底線（直書是左側的線）＋淡淡的格子底色，閃爍；左邊頁緣有一個小箭頭指著這一行 */
+.paper .type-layer.gridded .gcaret{display:inline-block;width:auto;height:auto;background:none;margin:0;animation:none;inline-size:0;block-size:var(--lh);vertical-align:top;position:relative}
+.paper .type-layer.gridded .gcaret::after{content:"";position:absolute;inset-inline-start:0;inline-size:calc(var(--uw) * 2);inset-block:10% 12%;background:rgba(255,206,84,.26);border-block-end:2.5px solid #A2392C;animation:blink 1.05s steps(1) infinite;pointer-events:none}
+.paper .type-layer.gridded .gcaret::before{content:"▸";position:absolute;inset-inline-start:calc(var(--uw) * var(--cu, 0) * -1 - 1em);inset-block-start:calc(50% - .5em);font-size:.8em;line-height:1;color:#A2392C;pointer-events:none}
+.paper[data-style="bahang"] .type-layer.gridded .gcaret::before{content:none}
+.paper .type-layer.gridded .gcaret.moved::after{animation:none}
+
+/* 書桌上：明信片右半邊（地址、郵票）不能寫正文 */
+#pw .paper[data-kind="postcard"] .pc-side{cursor:not-allowed}

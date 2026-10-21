@@ -66,12 +66,12 @@ export function cn(n: number): string {
   return d[h] + '百' + (r === 0 ? '' : r < 10 ? '零' + d[r] : cn(r));
 }
 
-export type Era = '80s' | 'minguo' | 'doodle';
+export type Era = '80s' | 'minguo' | 'doodle' | 'map';
 
-/** 頁首的模擬時間，三種年代各自的寫法 */
+/** 頁首的模擬時間，各年代各自的寫法 */
 export function clockTxt(t: number, era: Era): string {
   const d = tpe(t);
-  if (era === 'doodle') return `${d.y - 1911}年${d.mo}月${d.d}日 ${p2(d.h)}:${p2(d.mi)}`;
+  if (era === 'doodle' || era === 'map') return `${d.y - 1911}年${d.mo}月${d.d}日 ${p2(d.h)}:${p2(d.mi)}`;
   if (era === 'minguo') return `民國${cn(d.y - 1911)}年${cn(d.mo)}月${cn(d.d)}日　${cn(d.h)}時${cn(d.mi)}分`;
   return `${d.y - 1911}.${p2(d.mo)}.${p2(d.d)}　${p2(d.h)}:${p2(d.mi)}`;
 }

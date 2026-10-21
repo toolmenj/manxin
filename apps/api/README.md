@@ -72,7 +72,7 @@ $env:TEST_DATABASE_URL="postgres://manxin:manxin@localhost:5433/manxin_test"; np
 
 ## 環境變數
 
-見根目錄 `.env.example`。秘密（`APP_SECRET`、`RESEND_API_KEY`、`CWA_API_KEY`）只放 `.env`，不進版控。正式環境 `APP_SECRET` 至少 32 字元，否則不啟動。
+見根目錄 `.env.example`。上傳上限有兩個：圖片附件 `UPLOAD_MAX_BYTES`（預設 10 MB）、字型檔 `FONT_MAX_BYTES`（預設 20 MB，中文字型檔通常很大）。秘密（`APP_SECRET`、`RESEND_API_KEY`、`CWA_API_KEY`）只放 `.env`，不進版控。正式環境 `APP_SECRET` 至少 32 字元，否則不啟動。
 
 ## 目錄
 
@@ -83,9 +83,10 @@ src/
   worker-main.ts    獨立排程 worker
   config.ts clock.ts context.ts
   db/               schema.ts（drizzle）、client.ts（pg / PGlite）、migrate-cli.ts、seed.ts
-  routes/           auth、desk（書桌）、post（郵局、櫃台）、shipments（物流、收藏）、receive（收信）、dev
-  services/         letters、counter、shipments、receive、auth、jobs（排程）、mailer、weather、courier、storage、mails（信件文字）
-drizzle/            遷移（0000 資料表、0001 落子無悔的觸發器）
+  routes/           auth、desk（書桌、自訂字型）、post（郵局、櫃台）、shipments（物流、收藏）、receive（收信）、templates（信紙範本）、dev
+  services/         letters、counter、shipments、receive、auth、jobs（排程）、mailer、weather、courier、storage、mails（信件文字）、
+                    fonts（自訂字型：格式檢查、收件人讀檔權限）、paperTemplates（內建信紙範本的 SVG）
+drizzle/            遷移（0000 資料表、0001 落子無悔的觸發器、0002 字型表與信紙範本欄位）
 test/               API 測試（vitest + fastify.inject）
 ```
 
@@ -96,4 +97,4 @@ test/               API 測試（vitest + fastify.inject）
 | `Mailer` | `ConsoleMailer`：印 log + 存 `dev_outbox` | `ResendMailer`（`MAILER=resend`，TODO） |
 | `WeatherProvider` | `MockWeather`：原型的決定性隨機 | `CwaWeather`（中央氣象署，`WEATHER_PROVIDER=cwa`，TODO） |
 | `CourierProvider` | `CountyTableCourier`：原型的縣市距離表 | 快遞網站或付費 API（D-007，TODO） |
-| `Storage` | `LocalDiskStorage`（`UPLOAD_DIR`） | S3 相容儲存（TODO） |
+| `Storage` | `LocalDiskStorage`（`UPLOAD_DIR`；附件與字型檔都放這裡，字型檔名 `font-<id>`） | S3 相容儲存（TODO） |

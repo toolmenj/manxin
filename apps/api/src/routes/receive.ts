@@ -1,6 +1,6 @@
 /** 收信：收件人用開信連結（不需要登入） */
 import type { FastifyInstance } from 'fastify';
-import { getReceive, receiveAction, recipientAttachment, type RecvAction } from '../services/receive.ts';
+import { getReceive, receiveAction, recipientAttachment, recipientFont, type RecvAction } from '../services/receive.ts';
 import { enm, num, obj, str } from './schemas.ts';
 
 const tokenParam = obj({ token: str({ pattern: '^[A-Za-z0-9_-]{20,100}$' }) }, ['token']);
@@ -62,4 +62,14 @@ export async function receiveRoutes(app: FastifyInstance) {
     },
   );
 
+  /** 字型檔（給 FontFace 用）：信封與信紙用到的自訂字型 */
+  app.get<TP & { Params: { fontId: string } }>(
+    '/r/:token/fonts/:fontId',
+    { schema: { params: obj({ token: str({ pattern: '^[A-Za-z0-9_-]{20,100}$' }), fontId: str({ pattern: '^[0-9a-fA-F-]{36}$' }) }, ['token', 'fontId']) } },
+    async (req, reply) => {
+      const f = await recipientFont(ctx, req.params.token, req.params.fontId);
+      reply.header('content-type', f.mime).header('cache-control', 'private, max-age=86400');
+      return reply.send(ctx.storage.read(f.path));
+    },
+  );
 }

@@ -37,9 +37,10 @@ src/
     sheetWriter.ts     書寫同步：畫面先顯示，再依序送「追加字元／標記／筆畫」，帶 seq，斷線重送
     paper.ts           信紙的畫法（原型 buildPaper／renderType／drawInk／mountSheet）
     art.ts             信封、郵票、郵戳、畚箕掃把垃圾桶
-    scenes.ts          長動畫（丟垃圾桶、寄出的單號；原型留下的寄信／拆信場景也在）
+    scenes.ts          長動畫（丟垃圾桶、寄出後郵差收信→單號、收信的落桌與封口掀起；原型的全自動寄信／拆信場景改成註解保留，見下方）
+    postbox.ts         依年代畫郵筒、信滑進投信口、郵筒晃一下
     wastepaper.ts      廢紙的樣子（紙球、對摺、平放）與攤開的皺痕
-    typewriter.ts      古董打字機外觀、聲音、台灣／中國字盤與備用字盒
+    typewriter.ts      古董打字機外觀與聲音（鍵盤輸入、拼音鍵盤）
     map.ts             郵局示意地圖與腳印
     time.ts            臺北時間、民國紀年的顯示（不計算任何物流時間）
     prefs.ts           個人偏好（年代風格、書桌…存 localStorage）
@@ -53,3 +54,20 @@ e2e/                   Playwright
 - 畫信紙、信封、動畫的程式是從原型搬過來的命令式 DOM 程式，React 元件用 ref 掛上去；這樣畫面和原型一致。之後可以逐步改寫成元件。
 - 時間、送達、提醒、狀態、能不能裝進信封都看後端回傳；前端只負責顯示和倒數（倒數用 `GET /time` 校正）。
 - 動畫不卡資料：先送請求，動畫同時播；長動畫有「略過」，`prefers-reduced-motion` 時省略。
+
+
+## 做過但未使用的動畫
+
+2026-10-21 使用者決定：沒接上的動畫**不刪，改成註解保留**，方便之後報告。
+
+| 動畫 | 位置 | 內容 | 為何沒接上 |
+| --- | --- | --- | --- |
+| `sendScene`（全自動寄信） | `src/lib/scenes.ts`（連同共用的 `foldable`／`fold`／`envelopeEl`／`flipOver`／`intoBox`） | 信紙三摺 → 裝進信封 → 封口、蓋封緘 → 翻到正面 → 投郵筒 → 單號；明信片是翻面 → 投郵筒 | 流程改為親手做：摺、裝、封、貼、投都在郵局櫃台（`pages/Counter.tsx`）由寄件人自己做，自動動畫會取代這些步驟 |
+| `openScene`（全自動拆信） | `src/lib/scenes.ts` | 信封落下 → 翻面 → 封緘掉落、封口掀開 → 抽出信 → 攤開 | 流程改為親手做：翻面、劃開、倒出、攤開都在收信頁（`pages/Receive.tsx`）由收件人自己做。只取用了開頭（→ `arriveLetter`）和封口掀開（→ `openMouth`） |
+| 對應的 CSS | `src/styles/prototype.css` 的 `.envl`／`.e-*`／`.fold3`／`.fp`、`src/styles/app.css` 的 `.pb-solo` | 上面兩段專用的信封、三摺信紙、單獨郵筒的樣式 | 同上 |
+
+每段註解開頭都寫了曾經做過什麼、為何沒接上、日期。這些都不在打包結果裡（沒有任何地方 import）。要恢復時把 `// ` 拿掉，並把 `stampSVG`（art.ts）、`esc`（util.ts）加回 scenes.ts 的 import、CSS 一起解除註解。
+
+## 拼音字典（src/lib/pinyin-data.json）
+
+拼音鍵盤的字典。取 Jun Da《現代漢語字頻表》前 4,500 字（經 npm 套件 `hanzi` 的 `lib/data/frequencyjunda.txt.js` 取得），去掉聲調、ü 改寫成 v，依字頻排序；破音字的次要讀音排在後面。`_` 欄位是全部字依字頻的順序，用來合併打到一半的拼音（zh、xia）的候選字。

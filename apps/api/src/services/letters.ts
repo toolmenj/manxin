@@ -10,6 +10,7 @@ import {
   hasContent,
   unsentAskDue,
   nextUnsentAsk,
+  type PaperRef,
   type SheetOp,
   type SheetContent,
 } from '@manxin/engine';
@@ -20,7 +21,9 @@ import type { Db } from '../db/client.ts';
 import { attachments, letters, sheetOps, sheets, trips } from '../db/schema.ts';
 import { fail, notFound } from '../lib/errors.ts';
 import { resetAddrOk } from './counter.ts';
+import { assertFontUsable, customFontId, fontUrl } from './fonts.ts';
 import { enqueue } from './jobs.ts';
+import { isTemplate } from './paperTemplates.ts';
 
 type LetterRow = typeof letters.$inferSelect;
 type SheetRow = typeof sheets.$inferSelect;
@@ -37,22 +40,28 @@ export async function getLetter(db: Db, userId: string, letterId: string, lock =
   return rows[0] ?? notFound('找不到這封信');
 }
 
-export async function sheetContent(db: Db, sheetId: string): Promise<{ content: SheetContent; seq: number }> {
-  const ops = await db.select().from(sheetOps).where(eq(sheetOps.sheetId, sheetId)).orderBy(asc(sheetOps.seq));
-  return { content: applyOps(ops.map((o) => o.op as SheetOp)), seq: ops.length };
+/** 重放信紙內容。格位排版要知道紙種與樣式（可寫區域），所以傳整列 sheet 進來 */
+export async function sheetContent(db: Db, sh: Pick<SheetRow, 'id' | 'kind' | 'style'>): Promise<{ content: SheetContent; seq: number }> {
+  const ops = await db.select().from(sheetOps).where(eq(sheetOps.sheetId, sh.id)).orderBy(asc(sheetOps.seq));
+  return { content: applyOps(ops.map((o) => o.op as SheetOp), paperOf(sh)), seq: ops.length };
 }
 
+export const paperOf = (sh: Pick<SheetRow, 'kind' | 'style'>): PaperRef => ({ kind: sh.kind as PaperRef['kind'], style: sh.style as PaperRef['style'] });
+
 export async function sheetDTO(db: Db, s: SheetRow): Promise<SheetDTO> {
-  const { content, seq } = await sheetContent(db, s.id);
+  const { content, seq } = await sheetContent(db, s);
   return {
     id: s.id,
     kind: s.kind as SheetDTO['kind'],
     style: s.style as SheetDTO['style'],
     mode: s.mode as SheetDTO['mode'],
     font: s.font,
+    fontUrl: ((id) => (id ? fontUrl(id) : null))(customFontId(s.font)),
     bgAttachmentId: s.bgAttachmentId,
+    bgTemplate: s.bgTemplate,
     seq,
     chars: content.chars,
+    cursor: content.cursor,
     strokes: content.strokes,
     scan: content.scan,
     createdAt: s.createdAt.getTime(),
@@ -138,7 +147,7 @@ export async function letterDTO(ctx: Ctx, L: LetterRow, db: Db = ctx.db): Promis
 /** 書桌上有沒有東西（原型 letterHas） */
 export async function letterHas(db: Db, letterId: string): Promise<boolean> {
   const cur = await currentSheet(db, letterId);
-  const { content } = await sheetContent(db, cur.id);
+  const { content } = await sheetContent(db, cur);
   if (hasContent(content)) return true;
   if ((await refSheets(db, letterId)).length) return true;
   return (await letterAttachments(db, letterId)).length > 0;
@@ -164,6 +173,7 @@ export interface NewLetterInput {
 export async function createLetter(ctx: Ctx, user: { id: string; email: string }, input: NewLetterInput): Promise<LetterDTO> {
   const now = ctx.clock.date();
   return ctx.db.transaction(async (tx) => {
+    if (input.font) await assertFontUsable(tx, user.id, input.font);
     // 原型 newLetter：沿用上一封的寄件人資料
     const prev = await tx
       .select({ env: letters.env })
@@ -235,26 +245,51 @@ export async function patchSheet(
   ctx: Ctx,
   userId: string,
   letterId: string,
-  body: { kind?: SheetDTO['kind']; style?: SheetDTO['style']; mode?: SheetDTO['mode']; font?: string; bgAttachmentId?: string | null },
+  body: {
+    kind?: SheetDTO['kind'];
+    style?: SheetDTO['style'];
+    mode?: SheetDTO['mode'];
+    font?: string;
+    bgAttachmentId?: string | null;
+    bgTemplate?: string | null;
+  },
 ): Promise<SheetDTO> {
   return ctx.db.transaction(async (tx) => {
     const L = await getLetter(tx, userId, letterId, true);
     await assertWritable(tx, L);
     const sh = await currentSheet(tx, L.id);
-    const { content } = await sheetContent(tx, sh.id);
-    // 已落筆的紙不能換（PRD 2.1）：紙種、樣式、圖樣都算「紙」
-    if ((body.kind !== undefined || body.style !== undefined || body.bgAttachmentId !== undefined) && hasContent(content)) {
+    const { content } = await sheetContent(tx, sh);
+    // 已落筆的紙不能換（PRD 2.1）：紙種、樣式、圖樣（上傳的或範本）都算「紙」
+    if (
+      (body.kind !== undefined || body.style !== undefined || body.bgAttachmentId !== undefined || body.bgTemplate !== undefined) &&
+      hasContent(content)
+    ) {
       fail(409, 'SHEET_NOT_EMPTY', '這張已經落筆了，要換紙請用謄抄');
     }
+    if (body.bgAttachmentId && body.bgTemplate) fail(422, 'INVALID_OP', '上傳的圖樣和範本只能選一個');
     const patch: Partial<SheetRow> = {};
     if (body.kind) patch.kind = body.kind;
     if (body.style) patch.style = body.style;
     if (body.mode) patch.mode = body.mode;
-    if (body.font) patch.font = body.font;
+    if (body.font) {
+      await assertFontUsable(tx, userId, body.font);
+      patch.font = body.font;
+    }
     if (body.bgAttachmentId !== undefined) {
       if (body.bgAttachmentId) await ownAttachment(tx, userId, body.bgAttachmentId);
       patch.bgAttachmentId = body.bgAttachmentId;
-      if (body.bgAttachmentId) patch.style = 'custom';
+      if (body.bgAttachmentId) {
+        patch.style = 'custom';
+        patch.bgTemplate = null;
+      }
+    }
+    if (body.bgTemplate !== undefined) {
+      if (body.bgTemplate && !isTemplate(body.bgTemplate)) fail(422, 'INVALID_OP', '沒有這個信紙範本');
+      patch.bgTemplate = body.bgTemplate;
+      if (body.bgTemplate) {
+        patch.style = 'custom';
+        patch.bgAttachmentId = null;
+      }
     }
     const kind = patch.kind ?? sh.kind;
     if (kind === 'postcard' && (patch.style ?? sh.style) !== 'custom' && ['grid', 'bahang'].includes(patch.style ?? sh.style)) {
@@ -269,27 +304,58 @@ export async function patchSheet(
 
 export type AppendInput =
   | { kind: 'chars'; text: string }
-  | { kind: 'mark'; from: number; to: number; tool: string }
+  | { kind: 'mark'; from?: number; to?: number; at?: number[]; tool: string }
+  | { kind: 'move'; at: [number, number] }
   | { kind: 'stroke'; stroke: { pen: string; color: string; pts: number[][] } }
   | { kind: 'scan'; attachmentId: string };
 
+/** 追加請求的附帶資訊（見 AppendMeta）；舊的呼叫可以只傳 seq */
+export interface AppendOpts {
+  seq?: number;
+  sheetId?: string;
+  opId?: string;
+}
+
+/**
+ * 追加一筆操作。檢查順序：
+ * 1. 信能不能寫（寄出、先放著、帶出門都不行）
+ * 2. sheetId 不是目前的信紙 → 409 SHEET_CHANGED（舊分頁的字不會寫到謄抄後的新紙）
+ * 3. opId 已經寫過 → 不再寫，直接回目前的信紙（replayed）。要在 seq 檢查之前，重送才不會被當成衝突
+ * 4. seq 不一致 → 409 SEQ_CONFLICT
+ * 5. 操作合不合法（含可寫區域、不能疊打）→ 422 INVALID_OP
+ */
 export async function appendToSheet(
   ctx: Ctx,
   userId: string,
   letterId: string,
   input: AppendInput,
-  expectSeq?: number,
-): Promise<SheetDTO> {
+  optsIn?: number | AppendOpts,
+): Promise<SheetDTO & { replayed?: boolean }> {
+  const opts: AppendOpts = typeof optsIn === 'number' ? { seq: optsIn } : (optsIn ?? {});
   return ctx.db.transaction(async (tx) => {
     const L = await getLetter(tx, userId, letterId, true);
     await assertWritable(tx, L);
     const sh = await currentSheet(tx, L.id);
-    const { content, seq } = await sheetContent(tx, sh.id);
-    if (expectSeq !== undefined && expectSeq !== seq) {
+    if (opts.sheetId !== undefined && opts.sheetId.toLowerCase() !== sh.id) {
+      fail(409, 'SHEET_CHANGED', '這封信已經換了一張信紙（可能在別的地方謄抄過），請重新載入', { sheetId: sh.id });
+    }
+    if (opts.opId) {
+      const done = await tx
+        .select({ seq: sheetOps.seq })
+        .from(sheetOps)
+        .where(and(eq(sheetOps.sheetId, sh.id), eq(sheetOps.opId, opts.opId.toLowerCase())));
+      if (done.length) return { ...(await sheetDTO(tx, sh)), replayed: true };
+    }
+    const { content, seq } = await sheetContent(tx, sh);
+    if (opts.seq !== undefined && opts.seq !== seq) {
       fail(409, 'SEQ_CONFLICT', '信紙已經有新的內容，請重新載入', { seq });
     }
     let op: SheetOp;
-    if (input.kind === 'mark') op = { kind: 'mark', from: input.from, to: input.to, tool: input.tool as never, g: randomUUID() };
+    if (input.kind === 'mark') {
+      op = input.at
+        ? { kind: 'mark', at: input.at, tool: input.tool as never, g: randomUUID() }
+        : { kind: 'mark', from: input.from, to: input.to, tool: input.tool as never, g: randomUUID() };
+    } else if (input.kind === 'move') op = { kind: 'move', at: [input.at[0], input.at[1]] };
     else if (input.kind === 'scan') {
       const a = await ownAttachment(tx, userId, input.attachmentId);
       if (a.purpose !== 'scan') fail(422, 'INVALID_OP', '這個檔案不是紙本匯入用的');
@@ -298,9 +364,9 @@ export async function appendToSheet(
       const pts = input.stroke.pts.map((p) => p.map((v) => Math.round(v * 1e4) / 1e4)) as [number, number, number][];
       op = { kind: 'stroke', stroke: { pen: input.stroke.pen as never, color: input.stroke.color, pts } };
     } else op = { kind: 'chars', text: input.text };
-    const err = checkOp(content, sh.mode as 'type' | 'hand', op);
+    const err = checkOp(content, sh.mode as 'type' | 'hand', op, paperOf(sh));
     if (err) fail(422, 'INVALID_OP', opErrorMessage(err), { reason: err });
-    await tx.insert(sheetOps).values({ sheetId: sh.id, seq, op, createdAt: ctx.clock.date() });
+    await tx.insert(sheetOps).values({ sheetId: sh.id, seq, op, opId: opts.opId?.toLowerCase() ?? null, createdAt: ctx.clock.date() });
     return sheetDTO(tx, sh);
   });
 }
@@ -311,11 +377,14 @@ function opErrorMessage(code: string): string {
       WRONG_MODE: '這張信紙目前不是這種書寫模式',
       EMPTY_TEXT: '沒有字',
       TEXT_TOO_LONG: '一次送太多字了',
-      SHEET_FULL: '信紙寫滿了，請謄一張新的',
+      SHEET_FULL: '這張紙寫滿了，寫不下了',
       MARK_OUT_OF_RANGE: '塗改的位置不在信紙上',
       MARK_NOTHING: '塗改範圍裡沒有字',
       BAD_TOOL: '沒有這種塗改工具',
       BAD_STROKE: '筆畫資料不正確',
+      STROKE_OUT_OF_AREA: '這裡不能寫正文（明信片右半邊是寫地址、貼郵票的地方）',
+      MOVE_OUT_OF_AREA: '打字頭移不到那裡（不在可以寫字的地方）',
+      MOVE_OCCUPIED: '那一格已經有字了，不能疊著打',
       SHEET_NOT_EMPTY: '這張已經落筆了，先謄一張新的再匯入紙本',
     } as Record<string, string>
   )[code] ?? code;
@@ -328,7 +397,7 @@ export async function transcribe(ctx: Ctx, userId: string, letterId: string): Pr
     const L = await getLetter(tx, userId, letterId, true);
     await assertWritable(tx, L);
     const sh = await currentSheet(tx, L.id);
-    const { content } = await sheetContent(tx, sh.id);
+    const { content } = await sheetContent(tx, sh);
     if (!hasContent(content)) fail(409, 'SHEET_EMPTY', '這張還是空的，不用謄抄');
     await tx.update(sheets).set({ role: 'ref' }).where(eq(sheets.id, sh.id));
     await tx.insert(sheets).values({
@@ -340,6 +409,7 @@ export async function transcribe(ctx: Ctx, userId: string, letterId: string): Pr
       mode: sh.mode,
       font: sh.font,
       bgAttachmentId: sh.bgAttachmentId,
+      bgTemplate: sh.bgTemplate,
       createdAt: ctx.clock.date(),
     });
     return letterDTO(ctx, L, tx);

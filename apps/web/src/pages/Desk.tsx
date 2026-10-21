@@ -1,23 +1,25 @@
 /**
- * 書桌：打字機（鍵盤輸入＋IME、台灣字盤、中國字盤、備用字盒）、手寫、改錯、謄抄、舊信紙、先放著、附件。
- * 書寫只送三種追加操作（SheetWriter）。落子無悔的防護在 lib/noRegret.ts。
+ * 書桌：打字機（鍵盤輸入＋IME、拼音鍵盤）、手寫、改錯、謄抄、舊信紙、先放著、附件。
+ * 書寫只送追加操作（SheetWriter）：字、塗改、筆畫、移動打字頭。落子無悔的防護在 lib/noRegret.ts。
+ * 打字頭：點紙上的格子、方向鍵、Home／End 可以移過去（只能停在空格；明信片右半邊不能寫正文），Enter 換行；沒有退格。
  */
-import type { DiscardState, LetterDTO, MarkTool, SheetDTO, Stroke } from '@manxin/shared';
+import { canMoveTo, cellKey, fitText, gridCursor, inkOf, nextFreeInRow, paperGrid, type Cell, type DiscardState, type FontDTO, type LetterDTO, type MarkTool, type PaperTemplateDTO, type SheetDTO, type Stroke } from '@manxin/shared';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { api, attachmentUrl, isApiError } from '../api/client.ts';
+import { api, attachmentUrl, fileUrl, isApiError } from '../api/client.ts';
 import { Html, SheetThumb } from '../components/common.tsx';
 import { Confirm, FlipCard, ImageModal, RefModal, ScanEditor } from '../components/DeskModals.tsx';
 import { readImg, toJpeg } from '../lib/image.ts';
 import { eraDefaults, letterHas, loadCurrentLetter, ownSheet } from '../lib/letters.ts';
 import { anim, INOUT, RM } from '../lib/motion.ts';
 import { guardNoRegret, guardWritingArea } from '../lib/noRegret.ts';
-import { buildPaper, drawInk, drawX, FONTS, hasContent, INKS, PENS, renderType, strokeDraw, type Paper } from '../lib/paper.ts';
+import { buildPaper, cellFromPoint, drawInk, drawX, fontLoaded, FONTS, hasContent, inHandArea, INKS, isCustomFont, PENS, registerFont, renderType, strokeDraw, type Paper } from '../lib/paper.ts';
 import { DESKS, type DeskKind, type TwMode } from '../lib/prefs.ts';
+import { PinyinComposer } from '../lib/pinyin.ts';
 import { trashScene } from '../lib/scenes.ts';
-import { SheetWriter, type WriterStatus } from '../lib/sheetWriter.ts';
+import { contentOf, paperOfSheet, SheetWriter, type WriterStatus } from '../lib/sheetWriter.ts';
 import { D, fmt } from '../lib/time.ts';
-import { clack, Tray, Typewriter } from '../lib/typewriter.ts';
+import { clack, Typewriter } from '../lib/typewriter.ts';
 import { $$, el, hash, jit, uid } from '../lib/util.ts';
 import { useApp } from '../state/app.tsx';
 
@@ -39,6 +41,31 @@ const FIX_TOOLS: { t: MarkTool; label: string; style: React.CSSProperties; ch: s
 const clampStrokePts = (pts: [number, number, number][]): [number, number, number][] =>
   pts.map(([x, y, p]) => [Math.min(1.1, Math.max(-0.1, x)), Math.min(2, Math.max(-0.1, y)), Math.min(1, Math.max(0, p))]);
 
+const sameCell = (a: Cell | null | undefined, b: Cell | null | undefined) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
+
+const MSG_PC_RIGHT = '明信片右半邊是寫地址、貼郵票的地方，正文寫在左半邊。';
+const MSG_FULL = '這張紙寫滿了，寫不下了。';
+
+/** 格位排版時，拖過的字＝閱讀順序上介於頭尾之間、看得到的字；順排照字的順序 */
+function selectedIdx(sh: SheetDTO, a: number, b: number): number[] {
+  const [i, j] = a < b ? [a, b] : [b, a];
+  if (!sh.cursor) return Array.from({ length: j - i + 1 }, (_, k) => i + k).filter((k) => sh.chars[k] && sh.chars[k]!.c !== '\n');
+  const g = paperGrid(sh);
+  const pa = sh.chars[a]?.p,
+    pb = sh.chars[b]?.p;
+  if (!pa || !pb) return [];
+  const ka = cellKey(g, pa[0], pa[1]),
+    kb = cellKey(g, pb[0], pb[1]);
+  const [lo, hi] = ka < kb ? [ka, kb] : [kb, ka];
+  const out: number[] = [];
+  sh.chars.forEach((o, k) => {
+    if (!o.p || !inkOf(o)) return;
+    const key = cellKey(g, o.p[0], o.p[1]);
+    if (key >= lo && key <= hi) out.push(k);
+  });
+  return out;
+}
+
 export function DeskPage() {
   const app = useApp();
   const nav = useNavigate();
@@ -51,29 +78,40 @@ export function DeskPage() {
   const [fixTool, setFixTool] = useState<MarkTool>('s1');
   const [toolsOpen, setToolsOpen] = useState(true);
   const [unsent, setUnsent] = useState<LetterDTO[]>([]);
+  /** 自己上傳過的字型（存在後端，D-027；選單本身讀 FONTS，這個 state 只是讓選單重畫）與內建信紙範本 */
+  const [, setMyFonts] = useState<FontDTO[]>([]);
+  const [templates, setTemplates] = useState<PaperTemplateDTO[]>([]);
   const writer = useRef<SheetWriter | null>(null);
 
   const trip = L?.trip ?? null;
-  const kbd = prefs.twMode === 'keys';
 
   /* ---------- 讀信、建立寫入佇列 ---------- */
   const attach = useCallback(
     (letter: LetterDTO) => {
-      writer.current?.stop();
+      // 舊的佇列不直接丟：送完才停（M7）
+      void writer.current?.retire();
       const id = letter.id;
       writer.current = new SheetWriter(letter.sheet, {
-        send: (op, seq) =>
+        send: (op, m) =>
           op.kind === 'chars'
-            ? api.appendChars(id, op.text, seq)
+            ? api.appendChars(id, op.text, m)
             : op.kind === 'mark'
-              ? api.appendMark(id, op.from, op.to, op.tool, seq)
-              : api.appendStroke(id, op.stroke, seq),
+              ? api.appendMark(id, op.at, op.tool, m)
+              : op.kind === 'move'
+                ? api.appendMove(id, op.at, m)
+                : api.appendStroke(id, op.stroke, m),
         reload: async () => (await api.getLetter(id)).sheet,
         onChange: (d, st) => {
           setSheet(d);
           setSaveStatus(st);
         },
         onError: (m) => toast(m),
+        // 別的分頁謄抄過：整封信重新讀（桌邊的舊信紙也會多一張）
+        onSheetChanged: () =>
+          void api
+            .getLetter(id)
+            .then((nl) => setLetterRef.current(nl))
+            .catch(() => undefined),
       });
       setL(letter);
       setSheet(letter.sheet);
@@ -83,6 +121,8 @@ export function DeskPage() {
 
   const reload = useCallback(async () => {
     try {
+      // 還沒送完的字先送完，重新讀到的信紙才會有它們
+      await writer.current?.flush();
       const cur = await loadCurrentLetter(prefs.era);
       if (cur) attach(cur);
       setLoadErr(null);
@@ -98,8 +138,41 @@ export function DeskPage() {
 
   useEffect(() => {
     void reload();
-    return () => writer.current?.stop();
   }, [reload, app.timeVersion]);
+
+  // 離開書桌：排隊中的字送完才停；關分頁時還有字沒送出就先問一聲（M7）
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!writer.current?.hasUnsent) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      void writer.current?.retire();
+    };
+  }, []);
+
+  // 字型與範本清單：拿不到也不影響寫信（選單裡少幾個選項而已）
+  useEffect(() => {
+    let alive = true;
+    api
+      .fonts()
+      .then((r) => {
+        if (!alive) return;
+        r.fonts.forEach(registerFont);
+        setMyFonts(r.fonts);
+      })
+      .catch(() => undefined);
+    api
+      .paperTemplates()
+      .then((r) => alive && setTemplates(r.templates))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   /** 換了信紙（謄抄）或重新讀信 */
   const setLetter = useCallback((letter: LetterDTO) => {
@@ -108,6 +181,8 @@ export function DeskPage() {
     else if (writer.current && !writer.current.pending) writer.current.reset(letter.sheet);
     else setSheet((s) => s ?? letter.sheet);
   }, []);
+  const setLetterRef = useRef(setLetter);
+  setLetterRef.current = setLetter;
 
   const view = useMemo(() => (sheet ? ownSheet({ ...(L as LetterDTO), sheet }) : null), [sheet, L]);
   const locked = sheet ? hasContent(sheet) : false;
@@ -156,18 +231,19 @@ export function DeskPage() {
     if (sheet && sheet.mode !== 'type') setFixMode(false);
   }, [sheet]);
 
-  /* ---------- 紙、打字機、字盤（命令式的 DOM，照原型畫） ---------- */
+  /* ---------- 紙、打字機（命令式的 DOM，照原型畫） ---------- */
   const pwRef = useRef<HTMLDivElement>(null);
   const imeRef = useRef<HTMLTextAreaElement>(null);
   const twRef = useRef<HTMLDivElement>(null);
-  const trayRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const paper = useRef<Paper | null>(null);
   const tw = useRef<Typewriter | null>(null);
-  const tray = useRef<Tray | null>(null);
   const prevLen = useRef<{ id: string; n: number }>({ id: '', n: 0 });
-  const st = useRef({ fixMode, fixTool, trip, sheet, prefs, kbd });
-  st.current = { fixMode, fixTool, trip, sheet, prefs, kbd };
+  const st = useRef({ fixMode, fixTool, trip, sheet, prefs });
+  st.current = { fixMode, fixTool, trip, sheet, prefs };
+  /** 最近一次移動打字頭的時間（打字頭滑過去的動畫用） */
+  const movedAt = useRef(0);
+  const caretWas = useRef<DOMRect | null>(null);
 
   const placeIme = useCallback(() => {
     const ime = imeRef.current,
@@ -194,16 +270,100 @@ export function DeskPage() {
     (str: string) => {
       const s = st.current;
       if (s.trip || !s.sheet || s.sheet.mode !== 'type' || s.fixMode || !writer.current) return;
-      const text = str.replace(/\r\n?/g, '\n');
+      let text = str.replace(/\r\n?/g, '\n');
       if (!text) return;
+      // 格位排版：紙寫滿了，只寫得下前面幾個字
+      const n = fitText(contentOf(writer.current.display()), paperOfSheet(s.sheet), text);
+      if (n < [...text].length) {
+        text = [...text].slice(0, n).join('');
+        nag(MSG_FULL);
+        tw.current?.carriage(true);
+        if (!text) return;
+      }
       writer.current.push({ kind: 'chars', text });
       const chars = writer.current.display().chars;
       tw.current?.afterType(text, chars);
       if (text.includes('\n') && !RM && paper.current) paper.current.p.animate([{ transform: 'none' }, { transform: 'translateX(5px)' }, { transform: 'none' }], { duration: 340, easing: 'ease-out' });
-      if (s.kbd) imeRef.current?.focus({ preventScroll: true });
+      imeRef.current?.focus({ preventScroll: true });
     },
-    [],
+    [nag],
   );
+
+  /**
+   * 把打字頭移到某一格（點紙、方向鍵）。只能停在空格：落在有字的格子就往後找同一行的空格；
+   * 移動只是追加一筆「移動」，不會蓋掉、擦掉任何字。
+   */
+  const moveCaret = useCallback((want: Cell): boolean => {
+    const s = st.current;
+    const w = writer.current;
+    if (s.trip || !s.sheet || s.sheet.mode !== 'type' || s.fixMode || !w) return false;
+    if (s.prefs.twMode === 'py' && py.current?.active) return true; // 組字中先把拼音選完
+    const d = w.display();
+    const c = contentOf(d),
+      p = paperOfSheet(d);
+    let at: Cell | null = want;
+    const err = canMoveTo(c, p, want);
+    if (err === 'MOVE_OUT_OF_AREA') return false;
+    if (err === 'MOVE_OCCUPIED') at = nextFreeInRow(c, p, want);
+    if (!at) return false;
+    if (sameCell(at, gridCursor(c, p))) return true;
+    movedAt.current = Date.now();
+    w.push({ kind: 'move', at });
+    tw.current?.carriage();
+    return true;
+  }, []);
+
+  /** 方向鍵、Home、End：沿著方向一格一格找空格；推到紙邊推不動就叮一聲 */
+  const navCaret = useCallback(
+    (key: string): boolean => {
+      const s = st.current;
+      const w = writer.current;
+      if (s.trip || !s.sheet || s.sheet.mode !== 'type' || s.fixMode || !w) return false;
+      if (s.prefs.twMode === 'py' && py.current?.active) return true;
+      const d = w.display();
+      const c = contentOf(d),
+        p = paperOfSheet(d);
+      const g = paperGrid(p);
+      const [r0, u0] = gridCursor(c, p);
+      if (key === 'Home' || key === 'End') {
+        let u = 0;
+        if (key === 'End') {
+          const ch = c.cursor ? d.chars : [];
+          for (const o of ch) if (o.p && o.p[0] === r0 && inkOf(o)) u = Math.max(u, o.p[1] + (o.p[1] % 2 ? 1 : 2));
+          if (!c.cursor) u = u0;
+        }
+        const at = nextFreeInRow(c, p, [r0, Math.min(u, g.units - 1)]);
+        if (!at || !moveCaret(at)) tw.current?.carriage(true);
+        return true;
+      }
+      const v = g.vertical;
+      const [dr, du] =
+        key === 'ArrowUp' ? (v ? [0, -2] : [-1, 0]) : key === 'ArrowDown' ? (v ? [0, 2] : [1, 0]) : key === 'ArrowLeft' ? (v ? [1, 0] : [0, -2]) : v ? [-1, 0] : [0, 2];
+      let r = r0,
+        u = u0;
+      for (let i = 0; i < g.units * g.maxRows; i++) {
+        r += dr;
+        u += du;
+        if (r < 0 || r >= g.maxRows || u < 0 || u >= g.units) break;
+        if (!canMoveTo(c, p, [r, u])) {
+          moveCaret([r, u]);
+          return true;
+        }
+      }
+      tw.current?.carriage(true);
+      return true;
+    },
+    [moveCaret],
+  );
+
+  // 拼音鍵盤：字母先進組字器，選定的字才寫到紙上
+  const py = useRef<PinyinComposer | null>(null);
+  if (!py.current) py.current = new PinyinComposer((t) => typeChars(t), (ps) => tw.current?.pinyin(ps));
+  const feedPy = useCallback((str: string) => {
+    const s = st.current;
+    if (s.trip || !s.sheet || s.sheet.mode !== 'type' || s.fixMode) return;
+    py.current!.feed(str);
+  }, []);
 
   // 打字機外觀（只建一次）
   useEffect(() => {
@@ -213,6 +373,12 @@ export function DeskPage() {
     const down = (e: PointerEvent) => {
       if ((e.target as HTMLElement).closest('.tw-snd')) return;
       e.preventDefault();
+      const pick = (e.target as HTMLElement).closest<HTMLElement>('[data-pick]');
+      if (pick && py.current?.active) {
+        py.current.pick(Number(pick.dataset.pick));
+        focusIme();
+        return;
+      }
       const k = (e.target as HTMLElement).closest<HTMLElement>('.k');
       if (k) tw.current?.pressKey(k.dataset.code!);
       const s = st.current;
@@ -232,40 +398,24 @@ export function DeskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [L ? 1 : 0]);
 
-  // 字盤（換台灣／中國時重建）
-  useEffect(() => {
-    const root = trayRef.current;
-    if (!root || prefs.twMode === 'keys') {
-      tray.current?.destroy();
-      tray.current = null;
-      return;
-    }
-    if (tray.current?.mode === prefs.twMode) return;
-    tray.current?.destroy();
-    tray.current = new Tray(root, prefs.twMode, {
-      type: (ch) => typeChars(ch),
-      canType: () => {
-        const s = st.current;
-        return !s.trip && !s.fixMode && s.sheet?.mode === 'type';
-      },
-      nag,
-      mirror: () => st.current.prefs.trayMirror,
-      setMirror: (on) => setPrefs({ trayMirror: on }),
-    });
-  }, [prefs.twMode, typeChars, nag, setPrefs, L?.id]);
-
   // 輸入框的落子無悔防護
   useEffect(() => {
     const ime = imeRef.current;
     if (!ime) return;
     return guardNoRegret(ime, {
-      onText: (t) => typeChars(t),
+      onText: (t) => (st.current.prefs.twMode === 'py' ? feedPy(t) : typeChars(t)),
       nag,
       tabAsSpace: true,
-      onComposition: (t) => tw.current?.comp(t),
+      onBackspace: () => st.current.prefs.twMode === 'py' && !!py.current?.backspace(),
+      onEscape: () => py.current?.clear(),
+      onComposition: (t) => {
+        tw.current?.comp(t);
+        if (t && st.current.prefs.twMode === 'py') nag('拼音鍵盤會自己選字，請先把電腦的輸入法切成英文。');
+      },
       onKey: (e, ph) => tw.current?.onKey(e, ph),
+      onNav: (k) => navCaret(k),
     });
-  }, [typeChars, nag, L?.id]);
+  }, [typeChars, feedPy, nag, navCaret, L?.id]);
 
   // 紙上與整個書桌：右鍵、複製、剪下、拖放
   useEffect(() => {
@@ -318,12 +468,22 @@ export function DeskPage() {
     const pv = prevLen.current;
     const newFrom = pv.id === view.id && view.chars.length > pv.n ? pv.n : Infinity;
     prevLen.current = { id: view.id, n: view.chars.length };
+    const before = caretWas.current;
     renderType(b.tl, view, view.mode === 'type' && !fixMode && !trip, newFrom);
     setFixCursor(b);
     placeIme();
     tw.current?.eye(view.chars);
+    // 打字頭滑過去（只有「移動」時；打字時不用）
+    const c = b.tl.querySelector<HTMLElement>('#caret');
+    const now = c?.getBoundingClientRect() ?? null;
+    caretWas.current = now;
+    if (c && before && now && !RM && Date.now() - movedAt.current < 400 && typeof c.animate === 'function') {
+      const dx = before.left - now.left,
+        dy = before.top - now.top;
+      if (Math.abs(dx) + Math.abs(dy) > 1) c.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.3,.7,.2,1)' });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [structKey, sheet?.chars.length, marksN, fixMode, fixTool, !!trip]);
+  }, [structKey, sheet?.chars.length, marksN, fixMode, fixTool, !!trip, sheet?.cursor?.[0], sheet?.cursor?.[1]]);
 
   // 筆畫
   const strokesN = sheet?.strokes.length ?? 0;
@@ -339,6 +499,18 @@ export function DeskPage() {
         if (paper.current && s) drawX(paper.current.tl, s);
       });
   }, []);
+
+  // 自訂字型載完之後字形會變，打叉與游標位置重算
+  useEffect(() => {
+    if (!sheet || !isCustomFont(sheet.font)) return;
+    void fontLoaded(sheet.font).then((ok) => {
+      const s = st.current.sheet;
+      if (!ok || !paper.current || !s) return;
+      drawX(paper.current.tl, s);
+      placeIme();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet?.font]);
 
   function setFixCursor(b: Paper) {
     const { fixMode: fm, fixTool: ft } = st.current;
@@ -359,8 +531,12 @@ export function DeskPage() {
     p.addEventListener('pointerdown', (e) => {
       const s = st.current;
       if (s.trip || !s.sheet) return;
-      if (s.sheet.mode === 'type' && !s.fixMode && s.kbd) {
+      if (s.sheet.mode === 'type' && !s.fixMode) {
         e.preventDefault();
+        // 點哪裡，打字頭就移到哪一格（明信片右半邊不行）
+        const at = cellFromPoint(tl, s.sheet, e.clientX, e.clientY);
+        if (at === 'blocked') nag(MSG_PC_RIGHT);
+        else if (!moveCaret(at)) nag('那一行後面都寫滿了，換一行吧。');
         focusIme();
       }
     });
@@ -368,7 +544,7 @@ export function DeskPage() {
     p.addEventListener('click', () => {
       const s = st.current;
       if (s.trip || !s.sheet) return;
-      if (s.sheet.mode === 'type' && !s.fixMode && s.kbd && document.activeElement !== imeRef.current) focusIme();
+      if (s.sheet.mode === 'type' && !s.fixMode && document.activeElement !== imeRef.current) focusIme();
     });
     // 改錯
     let a: number | null = null,
@@ -380,9 +556,9 @@ export function DeskPage() {
     };
     const hl = () => {
       $$('.c.sel', tl).forEach((s) => s.classList.remove('sel'));
-      if (a == null || b == null) return;
-      const [i, j] = a < b ? [a, b] : [b, a];
-      for (let k = i; k <= j; k++) tl.querySelector(`.c[data-i="${k}"]`)?.classList.add('sel');
+      const sh = st.current.sheet;
+      if (a == null || b == null || !sh) return;
+      for (const k of selectedIdx(sh, a, b)) tl.querySelector(`.c[data-i="${k}"]`)?.classList.add('sel');
     };
     tl.addEventListener('pointerdown', (e) => {
       if (!st.current.fixMode || st.current.trip) return;
@@ -404,45 +580,70 @@ export function DeskPage() {
     tl.addEventListener('pointerup', () => {
       if (a == null || b == null) return;
       const s = st.current.sheet;
-      const [i, j] = a < b ? [a, b] : [b, a];
+      const at = s ? selectedIdx(s, a, b) : [];
       a = b = null;
       hl();
       if (!s || !writer.current) return;
-      let any = false;
-      for (let k = i; k <= j; k++) if (s.chars[k] && s.chars[k]!.c !== '\n') any = true;
-      if (any) writer.current.push({ kind: 'mark', from: i, to: j, tool: st.current.fixTool });
+      if (at.length) writer.current.push({ kind: 'mark', at, tool: st.current.fixTool });
     });
     tl.addEventListener('pointercancel', () => {
       a = b = null;
       hl();
     });
-    // 手寫
+    // 手寫：只畫在可寫區域裡（明信片右半邊是地址與郵票）；筆尖滑出去就提起來，滑回來再落下
     let stroke: Stroke | null = null,
+      segs: [number, number, number][][] = [],
       ctx: CanvasRenderingContext2D | null = null;
+    const ptOf = (ev: PointerEvent, r: DOMRect): [number, number, number] => [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.width, ev.pressure || 0.5];
     cv.addEventListener('pointerdown', (e) => {
       const s = st.current;
       if (s.sheet?.mode !== 'hand' || s.trip) return;
       e.preventDefault();
+      const r = cv.getBoundingClientRect();
+      const pt = ptOf(e, r);
+      if (!inHandArea(s.sheet, pt[0], pt[1])) {
+        nag(MSG_PC_RIGHT);
+        return;
+      }
       cv.setPointerCapture?.(e.pointerId);
-      const r = cv.getBoundingClientRect(),
-        w = r.width;
-      stroke = { pen: s.prefs.pen.pen, color: s.prefs.pen.color, pts: [[(e.clientX - r.left) / w, (e.clientY - r.top) / w, e.pressure || 0.5]] };
+      stroke = { pen: s.prefs.pen.pen, color: s.prefs.pen.color, pts: [] };
+      segs = [[pt]];
       ctx = cv.getContext('2d');
     });
     cv.addEventListener('pointermove', (e) => {
-      if (!stroke || !ctx) return;
+      const s = st.current.sheet;
+      if (s?.mode === 'hand' && !stroke) {
+        const pt = ptOf(e, cv.getBoundingClientRect());
+        cv.style.cursor = inHandArea(s, pt[0], pt[1]) ? '' : 'not-allowed';
+      }
+      if (!stroke || !s) return;
       const r = cv.getBoundingClientRect(),
         w = r.width;
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-      for (const ev of evs.length ? evs : [e]) stroke.pts.push([(ev.clientX - r.left) / w, (ev.clientY - r.top) / w, ev.pressure || 0.5]);
-      strokeDraw(ctx, { ...stroke, pts: stroke.pts.slice(-evs.length - 1) }, w);
+      for (const ev of evs.length ? evs : [e]) {
+        const pt = ptOf(ev, r);
+        const cur = segs[segs.length - 1];
+        if (!inHandArea(s, pt[0], pt[1])) {
+          if (cur && cur.length) segs.push([]);
+          continue;
+        }
+        if (!cur) segs.push([pt]);
+        else {
+          cur.push(pt);
+          if (ctx) strokeDraw(ctx, { ...stroke, pts: cur.slice(-2) }, w);
+        }
+      }
     });
     const fin = () => {
       if (!stroke || !writer.current) return;
-      const pts = clampStrokePts(stroke.pts.map((q) => q.map((v) => Math.round(v * 10000) / 10000) as [number, number, number]));
-      // 一筆最多 5000 點，太長就拆成好幾筆
-      for (let i = 0; i < pts.length; i += 4999) writer.current.push({ kind: 'stroke', stroke: { ...stroke, pts: pts.slice(Math.max(0, i - 1), i + 4999) } });
+      for (const seg of segs) {
+        if (!seg.length) continue;
+        const pts = clampStrokePts(seg.map((q) => q.map((v) => Math.round(v * 10000) / 10000) as [number, number, number]));
+        // 一筆最多 5000 點，太長就拆成好幾筆
+        for (let i = 0; i < pts.length; i += 4999) writer.current.push({ kind: 'stroke', stroke: { ...stroke, pts: pts.slice(Math.max(0, i - 1), i + 4999) } });
+      }
       stroke = null;
+      segs = [];
     };
     cv.addEventListener('pointerup', fin);
     cv.addEventListener('pointercancel', fin);
@@ -670,28 +871,32 @@ export function DeskPage() {
     });
   };
 
+  /** 上傳字型：先在瀏覽器試讀（讀不成就不送），再存到後端（D-027），存好就換上 */
   const onFontFile = async (f: File | undefined) => {
     if (!f) return;
+    const bad = () => toast('這個檔案讀不成字型。請用 ttf、otf、woff 或 woff2。');
+    if (!/\.(ttf|otf|woff2?)$/i.test(f.name)) return bad();
     try {
-      const name = 'U' + uid();
-      const ff = new FontFace(name, await f.arrayBuffer());
-      await ff.load();
-      document.fonts.add(ff);
-      FONTS[name] = { label: '自訂：' + f.name.replace(/\.\w+$/, ''), css: `'${name}','Noto Serif TC',serif` };
-      await patchSheet({ font: name });
-      toast('字型已載入。字型還沒存到伺服器，重新整理後要再上傳一次。');
+      if (typeof FontFace !== 'undefined') await new FontFace('mx-probe-' + uid(), await f.arrayBuffer()).load();
     } catch {
-      toast('這個檔案讀不成字型。請用 ttf、otf、woff 或 woff2。');
+      return bad();
+    }
+    try {
+      const font = await api.uploadFont(f, f.name);
+      registerFont(font);
+      setMyFonts((fs) => [...fs.filter((x) => x.id !== font.id), font]);
+      await patchSheet({ font: font.font });
+      toast('字型收好了。換台電腦、收信的人打開信，都看得到這個字。');
+    } catch (e) {
+      toast((e as Error).message);
     }
   };
 
   const setTwMode = (v: TwMode) => {
     setPrefs({ twMode: v });
-    if (sheet && !hasContent(sheet)) {
-      if (v === 'cn') void patchSheet({ font: 'song' });
-      else if (v === 'tw') void patchSheet({ font: 'lead' });
-    }
-    toast(v === 'keys' ? '用鍵盤打字。' : v === 'tw' ? '換成台灣的中文打字機：繁體字盤，照部首找字。' : '換成中國的中文打字機：簡體字盤，常一起用的字擺在一塊。');
+    if (v !== 'py') py.current?.clear();
+    if (sheet && !hasContent(sheet) && v === 'py') void patchSheet({ font: 'song' });
+    toast(v === 'keys' ? '用鍵盤打字。' : '換成拼音鍵盤：打羅馬拼音、按空白或數字選字，寫出來是簡體字。電腦的輸入法請切成英文。');
   };
 
   /* ---------- 畫面 ---------- */
@@ -792,7 +997,7 @@ export function DeskPage() {
             </div>
             <select id="styleSel" aria-label="信紙樣式" value={styleVal} disabled={locked || !!trip} onChange={(e) => void patchSheet({ style: e.target.value as SheetDTO['style'] })}>
               {STYLE_OPTS.map(([v, l]) => (
-                <option key={v} value={v} disabled={(sheet.kind === 'postcard' && (v === 'grid' || v === 'bahang')) || (v === 'custom' && !sheet.bgAttachmentId)}>
+                <option key={v} value={v} disabled={(sheet.kind === 'postcard' && (v === 'grid' || v === 'bahang')) || (v === 'custom' && !sheet.bgAttachmentId && !sheet.bgTemplate)}>
                   {l}
                 </option>
               ))}
@@ -812,6 +1017,41 @@ export function DeskPage() {
                 }}
               />
             </label>
+            {templates.length > 0 && (
+              <div className="tgroup" id="tplBox" style={{ width: '100%' }}>
+                <span className="label">信紙範本</span>
+                <div role="group" aria-label="信紙範本" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {templates.map((tp) => {
+                    const on = sheet.style === 'custom' && sheet.bgTemplate === tp.id;
+                    const off = locked || !!trip;
+                    return (
+                      <button
+                        key={tp.id}
+                        type="button"
+                        data-tpl={tp.id}
+                        aria-pressed={on}
+                        aria-label={tp.name}
+                        title={`${tp.name}：${tp.note}`}
+                        disabled={off}
+                        onClick={() => void patchSheet({ bgTemplate: tp.id })}
+                        style={{
+                          width: 44,
+                          height: 62,
+                          padding: 0,
+                          border: on ? '2px solid var(--ink)' : '1px solid rgba(0,0,0,.25)',
+                          background: `center / cover no-repeat url(${fileUrl(tp.url)})`,
+                          boxShadow: on ? '2px 3px 0 rgba(0,0,0,.25)' : 'none',
+                          transform: on ? 'rotate(-2deg)' : undefined,
+                          transition: 'transform .35s cubic-bezier(.4,0,.2,1)',
+                          cursor: off ? 'not-allowed' : 'pointer',
+                          opacity: off ? 0.55 : 1,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {sheet.kind === 'postcard' && (
               <div id="frontBox" className="tgroup" style={{ width: '100%' }}>
                 <span className="label">明信片正面</span>
@@ -876,8 +1116,7 @@ export function DeskPage() {
               {(
                 [
                   ['keys', '鍵盤輸入'],
-                  ['tw', '台灣字盤'],
-                  ['cn', '中國字盤'],
+                  ['py', '拼音鍵盤'],
                 ] as [TwMode, string][]
               ).map(([v, l]) => (
                 <button key={v} type="button" data-v={v} aria-pressed={prefs.twMode === v} onClick={() => setTwMode(v)}>
@@ -886,12 +1125,20 @@ export function DeskPage() {
               ))}
             </div>
             <span className="label">字型</span>
-            <select id="fontSel" aria-label="字型" value={FONTS[sheet.font] ? sheet.font : 'typewriter'} disabled={!!trip} onChange={(e) => void patchSheet({ font: e.target.value })}>
+            <select
+              id="fontSel"
+              aria-label="字型"
+              value={FONTS[sheet.font] || isCustomFont(sheet.font) ? sheet.font : 'typewriter'}
+              disabled={!!trip}
+              onChange={(e) => void patchSheet({ font: e.target.value })}
+            >
               {Object.entries(FONTS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v.label}
                 </option>
               ))}
+              {/* 字型清單還沒回來（或拿不到）時，信紙上的自訂字型也要選得到 */}
+              {isCustomFont(sheet.font) && !FONTS[sheet.font] && <option value={sheet.font}>自訂字型</option>}
             </select>
             <label className="btn small">
               上傳字型
@@ -1009,8 +1256,7 @@ export function DeskPage() {
               readOnly={!!trip}
             />
           </div>
-          <div className={'tw' + (fixMode ? ' dim' : '')} id="tw" ref={twRef} hidden={sheet.mode !== 'type' || !kbd} />
-          <div className={'tray' + (fixMode ? ' dim' : '')} id="tray" ref={trayRef} hidden={sheet.mode !== 'type' || kbd} />
+          <div className={'tw' + (fixMode ? ' dim' : '')} id="tw" ref={twRef} hidden={sheet.mode !== 'type'} />
           <p className="rule-note">
             落子無悔：沒有復原、沒有刪除、沒有橡皮擦，複製與貼上已停用。
             {saveStatus === 'saving' && <span className="save-st"> 收進抽屜裡…</span>}

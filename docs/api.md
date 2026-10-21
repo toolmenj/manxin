@@ -26,7 +26,8 @@
 | 404 | `NOT_FOUND` | 找不到，或不是你的（不透露存在與否）；也包含不存在的路徑（例如任何修改、刪除信紙內容的路徑） |
 | 404 | `INVALID_TOKEN` | 開信連結無效、已改寄或已退回 |
 | 409 | `LETTER_LOCKED` | 信已寄出／先放著／帶去郵局了，不能寫 |
-| 409 | `SEQ_CONFLICT` | 追加時帶的 `seq` 和伺服器不一致（避免重送造成重複） |
+| 409 | `SEQ_CONFLICT` | 追加時帶的 `seq` 和伺服器不一致（別的分頁也寫了） |
+| 409 | `SHEET_CHANGED` | 追加時帶的 `sheetId` 不是目前的信紙（別的地方謄抄過）；`details.sheetId` 是目前的信紙 |
 | 409 | `SHEET_EMPTY` / `SHEET_NOT_EMPTY` | 空白不用謄抄／已落筆不能換紙 |
 | 409 | `REFS_PENDING` | 桌邊還有舊信紙沒處理 |
 | 409 | `LETTER_EMPTY` | 書桌上沒有信 |
@@ -40,7 +41,7 @@
 | 409 | `NO_EDITS_LEFT` / `SAME_EMAIL` / `NOT_DELIVERED` / `SIGNED` / `RETURNED` | 改收件信箱的各種不允許 |
 | 410 | `GONE` | 信已退回 |
 | 413 / 415 | `BAD_REQUEST` | 檔案太大／不是 multipart |
-| 422 | `INVALID_OP` | 追加操作不合法，`details.reason`：`WRONG_MODE`、`EMPTY_TEXT`、`TEXT_TOO_LONG`、`SHEET_FULL`、`MARK_OUT_OF_RANGE`、`MARK_NOTHING`、`BAD_TOOL`、`BAD_STROKE`、`SHEET_NOT_EMPTY` |
+| 422 | `INVALID_OP` | 追加操作不合法，`details.reason`：`WRONG_MODE`、`EMPTY_TEXT`、`TEXT_TOO_LONG`、`SHEET_FULL`（含格位排版寫到最後一行之後）、`MARK_OUT_OF_RANGE`、`MARK_NOTHING`、`BAD_TOOL`、`BAD_STROKE`、`STROKE_OUT_OF_AREA`（筆畫畫到不能寫正文的地方，例如明信片右半邊）、`MOVE_OUT_OF_AREA`（打字頭移到可寫區域外）、`MOVE_OCCUPIED`（打字頭移到已經有字的格子）、`SHEET_NOT_EMPTY` |
 | 422 | `INVALID_EMAIL` | 信箱格式不對 |
 | 422 | `TOO_WIDE` / `TOO_LONG` | 信紙塞不進信封（`details` 有寬高與信封內徑） |
 | 422 | `FOLD_OUT_OF_RANGE` | 摺線不在信紙上 |
@@ -52,10 +53,12 @@
 完整定義見 `packages/shared/src/index.ts`。
 
 - `LetterDTO`：`id`、`status`（`drafting` 書桌上／`shelved` 先放著／`sent` 已寄出）、`env`（地址）、`sheet`（目前的信紙）、`refs`（謄抄後留在桌邊的舊信紙）、`attachments`、`askDue`（先放著滿 30 天）、`trip`。
-- `SheetDTO`：`kind`（`letter`／`postcard`）、`style`（`lined`／`bahang`／`grid`／`plain`／`custom`）、`mode`（`type`／`hand`）、`font`、`seq`（追加次數）、`chars[{c, m:[{t, g}]}]`、`strokes[{pen, color, pts:[[x,y,壓力]]}]`、`scan`。
+- `SheetDTO`：`kind`（`letter`／`postcard`）、`style`（`lined`／`bahang`／`grid`／`plain`／`custom`）、`mode`（`type`／`hand`）、`font`（內建字型代號，或自訂字型 `f:<字型 id>`）、`fontUrl`（自訂字型的檔案網址，內建字型是 `null`）、`bgAttachmentId`（上傳的圖樣）／`bgTemplate`（內建範本 id，兩者二選一）、`seq`（追加次數）、`chars[{c, m:[{t, g}], p?:[行, 半格]}]`、`cursor`（打字頭 `[行, 半格]`；`null`＝順排，見下方「格位排版」）、`strokes[{pen, color, pts:[[x,y,壓力]]}]`、`scan`。
 - `CounterDTO`：櫃台狀態，`env`（`post`／`kraft`／`chinese`／`wax`／`custom`／`card`）、`envLocked`、`stamp`、`pm`、`stampPos`／`pmPos`（`{x,y,r}`，x、y 是 0–1 相對信封）、`folds[{a:'h'|'v', at}]`、`pack{x0,y0,x1,y1}`（信紙寬 = 1、高 = 1.414）、`rot`、`inserted`、`sealed`、`addrOk`、`etxt`（信封上的字）、`missing`。
 - `ShipmentDTO`：`no`（單號）、`state`（`transit` 運送中／`rerouting` 改寄中／`waiting` 已送達未簽收／`signed` 已簽收／`returned` 已退回）、`editsLeft`、`stops`、`reached`、`events`（只列已經發生的，新到舊）、`deliverAt`（送達後才有）、`returnPostmark`。
-- `ReceiveDTO`：收件人看到的信封快照 `pkg`、收信狀態 `recv`、攤開後才有的 `letter`。
+- `ReceiveDTO`：收件人看到的信封快照 `pkg`（含信封字型 `efont`／`efontUrl`）、收信狀態 `recv`、攤開後才有的 `letter`。
+- `FontDTO`：`id`、`font`（填進信紙設定用的 `f:<id>`）、`name`、`format`（`ttf`／`otf`／`woff`／`woff2`）、`size`、`url`、`createdAt`。
+- `PaperTemplateDTO`：`id`、`name`、`era`（`80s`／`minguo`，只是分類）、`note`、`url`（SVG）。
 
 ---
 
@@ -85,24 +88,52 @@
 
 | 方法 | 路徑 | 輸入 | 輸出 | 錯誤 |
 |---|---|---|---|---|
-| POST | `/letters` | `{ kind?, style?, mode?, font?, env? }` | 201 `LetterDTO`（寄件人資料沿用上一封，信箱預設為帳號信箱） | 400 |
+| POST | `/letters` | `{ kind?, style?, mode?, font?, env? }` | 201 `LetterDTO`（寄件人資料沿用上一封，信箱預設為帳號信箱） | 400、422（自訂字型不是自己的） |
 | GET | `/letters?status=` | `drafting`／`shelved`／`sent` | `{ letters: LetterDTO[] }` | — |
 | GET | `/letters/:id` | — | `LetterDTO` | 404 |
 | PATCH | `/letters/:id` | `{ env?: Partial<EnvAddress>, frontAttachmentId? }` | `LetterDTO`。改了任一個信箱，櫃台的「地址確認」會重設 | 409 `LETTER_LOCKED`（已寄出） |
-| PATCH | `/letters/:id/sheet` | `{ kind?, style?, mode?, font?, bgAttachmentId? }`（信紙設定，**不是內容**） | `SheetDTO` | 409 `SHEET_NOT_EMPTY`（已落筆不能換紙種、樣式、圖樣）、409 `LETTER_LOCKED` |
+| PATCH | `/letters/:id/sheet` | `{ kind?, style?, mode?, font?, bgAttachmentId?, bgTemplate? }`（信紙設定，**不是內容**）。指定 `bgAttachmentId` 或 `bgTemplate` 時 `style` 自動變成 `custom`，並清掉另一個；`font` 可以是自訂字型 `f:<id>`（必須是自己上傳的） | `SheetDTO` | 409 `SHEET_NOT_EMPTY`（已落筆不能換紙種、樣式、圖樣，**範本也算圖樣**）、409 `LETTER_LOCKED`、422 `INVALID_OP`（沒有這個範本／字型、兩種圖樣同時指定） |
 
 ### 信紙內容：只有追加
 
-沒有任何更新或刪除內容的端點。`seq` 選填，帶了就做樂觀鎖（不一致回 409 `SEQ_CONFLICT`），建議前端都帶，重送才不會重複。
+沒有任何更新或刪除內容的端點。每個追加請求都可以帶三個選填欄位（`AppendMeta`），前端一律都帶：
+
+- `seq`：客戶端認為目前的追加次數，不一致回 409 `SEQ_CONFLICT`。
+- `sheetId`：客戶端認為目前的信紙，不是目前的信紙（別的地方謄抄過）回 409 `SHEET_CHANGED`，舊分頁的字不會寫到新紙上。
+- `opId`：客戶端為每個操作產生的 UUID（`sheet_ops (sheet_id, op_id)` 唯一）。同一張信紙上已經有這個 `opId`，就**不再寫一次**，直接回 200 與目前的信紙——回應遺失後重送不會重複寫入。這個檢查在 `seq` 之前，所以重送不會被當成衝突。
+
+檢查順序：信能不能寫（409 `LETTER_LOCKED`）→ `sheetId` → `opId` → `seq` → 操作本身（422 `INVALID_OP`）。
 
 | 方法 | 路徑 | 輸入 | 輸出 | 錯誤 |
 |---|---|---|---|---|
-| POST | `/letters/:id/sheet/chars` | `{ text, seq? }`（打字模式；`\r\n` 轉成 `\n`；一次最多 2000 字，一張最多 20000 字） | 201 `SheetDTO` | 409 `LETTER_LOCKED`／`SEQ_CONFLICT`；422 `INVALID_OP` |
-| POST | `/letters/:id/sheet/marks` | `{ from, to, tool, seq? }`，tool：`s1` 單橫線／`s2` 雙橫線／`x` 打叉／`blk` 塗黑／`tape` 修正帶；範圍含頭尾，換行不加標記 | 201 `SheetDTO` | 同上 |
-| POST | `/letters/:id/sheet/strokes` | `{ stroke: { pen, color, pts }, seq? }`（手寫模式；pen：`fountain`／`ball`／`pencil`；color `#RRGGBB`；pts 最多 5000 點，x 0–1、y 0–2、壓力 0–1） | 201 `SheetDTO` | 同上 |
+| POST | `/letters/:id/sheet/chars` | `{ text, seq?, sheetId?, opId? }`（打字模式；`\r\n` 轉成 `\n`；一次最多 2000 字，一張最多 20000 字） | 201 `SheetDTO`（`opId` 重送時 200） | 409 `LETTER_LOCKED`／`SHEET_CHANGED`／`SEQ_CONFLICT`；422 `INVALID_OP` |
+| POST | `/letters/:id/sheet/moves` | `{ at: [行, 半格], seq?, sheetId?, opId? }`（打字模式；移動打字頭，不寫字、不蓋字；只能停在可寫區域裡的空格） | 同上 | 同上（422 `MOVE_OUT_OF_AREA`／`MOVE_OCCUPIED`） |
+| POST | `/letters/:id/sheet/marks` | `{ at: [第幾個字…], tool, seq?, sheetId?, opId? }`；舊的 `{ from, to }`（範圍含頭尾）仍然接受，兩種只能擇一。tool：`s1` 單橫線／`s2` 雙橫線／`x` 打叉／`blk` 塗黑／`tape` 修正帶；換行不加標記 | 同上 | 同上 |
+| POST | `/letters/:id/sheet/strokes` | `{ stroke: { pen, color, pts }, seq?, sheetId?, opId? }`（手寫模式；pen：`fountain`／`ball`／`pencil`；color `#RRGGBB`；pts 最多 5000 點，x 0–1、y 0–2、壓力 0–1；每一點都要在可寫區域內） | 同上 | 同上（422 `STROKE_OUT_OF_AREA`） |
 | POST | `/letters/:id/sheet/scan` | `{ attachmentId }`（紙本匯入，只能在空白信紙；附件 purpose 必須是 `scan`） | 201 `SheetDTO` | 422 `SHEET_NOT_EMPTY` |
 
-資料庫層另有觸發器：`sheet_ops`、`envelope_ops` 不能 UPDATE、不能單獨 DELETE（只能隨信紙丟進垃圾桶一起刪）、已寄出的信不能再 INSERT。
+#### 格位排版與可寫區域（2026-10-21）
+
+- **順排**：沒有任何 `move` 的信紙（所有舊信紙），`cursor` 是 `null`、字沒有 `p`，畫法跟以前完全一樣（字一路往後接，折行交給瀏覽器）。
+- **格位**：第一次 `move` 之後整張紙改用格子定位。之前打的字依格位規則從第 0 行第 0 格重排一次，之後的字從打字頭往後打。每個字帶 `p: [行, 半格]`。
+- 格子單位是**半格**：中文等全形字佔 2 個半格、英數半形字佔 1 個半格（稿紙、八行箋一律一字一格）。八行箋直書，「行」是直行，由右往左數。
+- **不能疊打**：要落字的格子已經有字，就往後跳到下一個空格；一行放不下就換到下一行開頭。空白（半形、全形、Tab）只推打字頭、不佔格子。換行回到下一行開頭。字落到最後一行之後回 422 `SHEET_FULL`（順排不受行數限制）。
+- 可寫區域（`@manxin/engine` 的 `paperGrid`／`handArea`，前後端共用）：
+
+| 紙 | 一行 | 行數 | 手寫可寫範圍（以紙寬為 1） |
+|---|---|---|---|
+| 信紙（橫線、空白、自訂圖樣） | 54 半格（27 字） | 22 | x −0.1–1.1、y −0.1–2 |
+| 稿紙 | 32 半格（16 字） | 20 | 同上 |
+| 八行箋（直書） | 40 半格（20 字） | 看得到 8 行，可往左捲到 40 行 | 同上 |
+| 明信片 | 36 半格（18 字），只有左半邊正文區 | 12 | x −0.1–0.55（右半邊是收件人地址與郵票），y −0.1–0.7 |
+
+- 移動打字頭不算落筆：只移動過、還沒寫字的紙仍然可以換紙種、樣式（重放時超出新紙的位置會夾回紙內）。
+
+資料庫層另有觸發器（`0001_append_only`、`0004_append_only_v2`）：
+
+- `sheet_ops`、`envelope_ops` 不能 UPDATE、不能單獨 DELETE（只能隨信紙丟進垃圾桶一起刪）、已寄出的信不能再 INSERT（檢查狀態時 `FOR SHARE` 鎖住那封信）。
+- 已寄出的信：`sheets` 不能直接 UPDATE、DELETE（字紙冢的舊信紙不受限）；`letters` 不能退回成未寄出、不能直接 DELETE。刪帳號等上層連帶刪除照常。
+- `sheet_ops`、`envelope_ops`、`sheets`、`letters` 不能 TRUNCATE。維運或測試要清空時，在同一個交易裡先 `SELECT set_config('manxin.allow_truncate', 'on', true)`。
 
 ### 謄抄、舊信紙、字紙冢
 
@@ -128,7 +159,28 @@
 | POST | `/letters/:id/attachments/:attId/take-out` | 附件「拿出來」（原型有；只在書桌上、出門前） | `LetterDTO` | 409、404 |
 | GET | `/attachments/:id` | 讀檔（只有上傳者） | 檔案 | 404 |
 
-TODO：字型上傳（PRD 2.3）、信紙圖樣範本庫、正式環境改 S3 相容儲存。
+TODO：正式環境改 S3 相容儲存。
+
+### 自訂字型（PRD 2.3、D-027：存在後端）
+
+字型屬於帳號（不屬於某封信），換瀏覽器、重新整理都還在。信紙設定 `font: 'f:<id>'` 就是用這個字型；寄出時信封快照的 `efont` 跟著信紙（D-028），收件人用開信連結讀得到字型檔（見第 7 節）。沒有刪除端點（寄出去的信還要用）。
+
+| 方法 | 路徑 | 輸入 | 輸出 | 錯誤 |
+|---|---|---|---|---|
+| POST | `/fonts` | multipart，欄位 `file`；副檔名 `ttf`／`otf`／`woff`／`woff2`，而且**檔頭（magic bytes）要對得上**（`00010000` 或 `true` = TrueType、`OTTO` = OpenType CFF、`wOFF`、`wOF2`；`.otf` 也接受 TrueType 外框）；上限 `FONT_MAX_BYTES`（預設 20 MB，和圖片的 `UPLOAD_MAX_BYTES` 分開）；一個帳號最多 30 個 | 201 `FontDTO` | 401、413（太大）、415（不是 multipart）、422 `INVALID_OP`（`details.reason`：`BAD_EXT` 副檔名不對、`BAD_FONT` 檔頭不對）、409 `CONFLICT`（超過 30 個） |
+| GET | `/fonts` | — | `{ fonts: FontDTO[] }`（舊到新） | 401 |
+| GET | `/fonts/:id` | — | 字型檔（`content-type: font/ttf` 等，給 `FontFace` 用）；只有上傳者 | 401、404 |
+
+### 信紙圖樣範本庫（公開，不需要登入）
+
+內建 10 個範本，全部是伺服器產生的 SVG（不引用外部圖片或字型）：八〇年代的航空信紙、粉彩信紙、方格紙、郵戳底紋、碎花，民國的竹葉箋、水波紋、民國花箋、梅花箋、祥雲箋。不畫和字距對齊的橫線（打字機行高會隨畫面縮放）。
+
+| 方法 | 路徑 | 輸出 | 錯誤 |
+|---|---|---|---|
+| GET | `/paper-templates` | `{ templates: PaperTemplateDTO[] }` | — |
+| GET | `/paper-templates/:id.svg` | SVG（`image/svg+xml`，可快取一天）。收件人看信紙也是讀這裡 | 404、400（格式不對） |
+
+信件用 `PATCH /letters/:id/sheet { bgTemplate }` 指定範本；已落筆後鎖紙的規則照舊（409 `SHEET_NOT_EMPTY`），謄抄時新紙沿用範本。
 
 ## 4. 前往郵局（需登入）
 
@@ -175,7 +227,7 @@ D-005（暫定）：24h／48h／30 天一律從**第一次送達**起算，改�
 
 | 方法 | 路徑 | 輸入 | 說明 |
 |---|---|---|---|
-| GET | `/r/:token` | — | `ReceiveDTO`。攤開（或撕破）之前 `letter` 是 `null` |
+| GET | `/r/:token` | — | `ReceiveDTO`。攤開（或撕破）之前 `letter` 是 `null`。`pkg.efont` 是信封上的字型（D-028：寄出時信紙的字型），自訂字型時 `pkg.efontUrl` 是 `/r/:token/fonts/:id`，否則 `null`；`letter.sheet.fontUrl` 同樣換成開信連結的網址 |
 | POST | `/r/:token/enter` | — | 點開連結。明信片一進來就算打開（簽收） |
 | POST | `/r/:token/open` | `{ method: 'knife'\|'tear', cutPath? }` | **開信即簽收**。膠貼信封用手撕，伺服器擲骰 50% 留下毛邊（`recv.rough`），結果存檔 |
 | POST | `/r/:token/tear` | `{ x }`（0–1） | 撕毀（D-013 暫定：前端依軌跡判斷後回報位置，後端只驗證狀態）。位置夾在 0.2–0.8，產生四片碎片，也算簽收 |
@@ -186,6 +238,7 @@ D-005（暫定）：24h／48h／30 天一律從**第一次送達**起算，改�
 | POST | `/r/:token/unfold` | — | 攤開（要先倒出來），之後回應裡才有信的內容與摺痕 |
 | POST | `/r/:token/collect` | — | 收進收藏（要先攤開） |
 | GET | `/r/:token/attachments/:attId` | — | 讀附件（倒出來之後） |
+| GET | `/r/:token/fonts/:fontId` | — | 讀字型檔（給 `FontFace` 用）。只限這封信用到的字型：信封的 `efont` 一開始就讀得到，信紙的字型要攤開之後；其他字型 404 |
 
 錯誤：連結無效、已改寄 404 `INVALID_TOKEN`；已退回 410 `GONE`（或 404，退信後連結即清除）；順序不對 409 `INVALID_STATE`（`details.reason`：`NOT_ENTERED`、`NOT_OPENED`、`NOT_POURED`、`NOT_UNFOLDED`、`ALREADY_OPENED`、`ALREADY_TAKEN`、`NO_WAX`、`NOT_TORN` …）。
 

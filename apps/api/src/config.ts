@@ -17,6 +17,8 @@ export interface Config {
   cwaApiKey: string | undefined;
   uploadDir: string;
   uploadMaxBytes: number;
+  /** 字型檔上限（中文字型常常十幾 MB，和圖片分開設） */
+  fontMaxBytes: number;
   workerInline: boolean;
   workerIntervalMs: number;
   devClockOffsetMs: number;
@@ -45,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     cwaApiKey: env.CWA_API_KEY,
     uploadDir: path.resolve(env.UPLOAD_DIR ?? './uploads'),
     uploadMaxBytes: Number(env.UPLOAD_MAX_BYTES ?? 10 * 1024 * 1024),
+    fontMaxBytes: Number(env.FONT_MAX_BYTES ?? 20 * 1024 * 1024),
     workerInline: (env.WORKER_INLINE ?? 'true') !== 'false',
     workerIntervalMs: Number(env.WORKER_INTERVAL_MS ?? 30_000),
     // 正式環境一律不允許時鐘偏移

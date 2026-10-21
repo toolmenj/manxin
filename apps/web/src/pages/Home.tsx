@@ -13,7 +13,7 @@ import { DESK_SW, DESKS, ERA_INFO, type DeskKind } from '../lib/prefs.ts';
 import type { Era } from '../lib/time.ts';
 import { useApp } from '../state/app.tsx';
 
-const BLANK: SheetDTO = { id: 'blank', kind: 'letter', style: 'lined', mode: 'type', font: 'typewriter', bgAttachmentId: null, seq: 0, chars: [], strokes: [], scan: null, createdAt: 0 };
+const BLANK: SheetDTO = { id: 'blank', kind: 'letter', style: 'lined', mode: 'type', font: 'typewriter', fontUrl: null, bgAttachmentId: null, bgTemplate: null, seq: 0, chars: [], strokes: [], scan: null, createdAt: 0 };
 
 export function HomePage() {
   const app = useApp();

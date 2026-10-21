@@ -17,6 +17,11 @@ export const uuidParam = (name = 'id') => obj({ [name]: str({ pattern: '^[0-9a-f
 
 export const seqProp = { seq: int({ minimum: 0 }) };
 
+const uuidStr = str({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' });
+
+/** 追加請求共用：seq（樂觀鎖）、sheetId（換紙偵測）、opId（重送不重複） */
+export const appendMetaProps = { ...seqProp, sheetId: uuidStr, opId: uuidStr };
+
 export const strokeSchema = obj(
   {
     pen: enm('fountain', 'ball', 'pencil'),

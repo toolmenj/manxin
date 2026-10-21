@@ -8,6 +8,7 @@
  * - keydown：Backspace／Delete、Ctrl/⌘+Z/Y（復原、重做）、Ctrl/⌘+C/X（複製、剪下）、Ctrl/⌘+V（貼上）、Ctrl/⌘+A、方向鍵與 Home/End/PageUp/PageDown
  * - beforeinput：delete*、history*、insertFromPaste／insertFromDrop／insertFromYank（虛擬鍵盤的退格也走這裡）
  * - paste、cut、copy、drop、dragover、contextmenu（右鍵選單）
+ * 方向鍵與 Home／End 不會移動輸入框裡的游標（輸入框永遠是空的）；有 onNav 時交給它移動紙上的打字頭（只移動，不刪字）。
  * 放行：輸入法組字中的按鍵與退格（isComposing、keyCode 229、deleteCompositionText、insertCompositionText），
  * 因為那是在選字，還沒寫到紙上。
  */
@@ -23,6 +24,15 @@ export interface NoRegretOptions {
   onComposition?: (text: string | null) => void;
   /** 每個按鍵（打字機鍵盤動畫、聲音），不影響防護 */
   onKey?: (e: KeyboardEvent, phase: 'down' | 'up') => void;
+  /**
+   * 退格交給自己的組字器（拼音鍵盤）：回傳 true 表示刪的是還沒寫到紙上的拼音，放行；
+   * false 表示沒在組字，照落子無悔擋下。
+   */
+  onBackspace?: () => boolean;
+  /** Esc：清掉組字中的拼音 */
+  onEscape?: () => void;
+  /** 方向鍵、Home、End：移動紙上的打字頭（書桌）；回傳 true 表示處理了 */
+  onNav?: (key: string) => boolean;
   /** 書桌與信封的提醒文字略有不同 */
   messages?: Partial<typeof DEFAULT_MESSAGES>;
 }
@@ -85,6 +95,21 @@ export function guardNoRegret(fieldIn: Field, o: NoRegretOptions): () => void {
 
   const onKeyDown = (e: KeyboardEvent) => {
     o.onKey?.(e, 'down');
+    if (!e.isComposing && e.keyCode !== 229) {
+      if (e.key === 'Backspace' && o.onBackspace?.()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Escape' && o.onEscape) {
+        e.preventDefault();
+        o.onEscape();
+        return;
+      }
+      if (/^(Arrow(Up|Down|Left|Right)|Home|End)$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && o.onNav?.(e.key)) {
+        e.preventDefault();
+        return;
+      }
+    }
     const b = blockedKey(e, m);
     if (b !== null) {
       e.preventDefault();
@@ -98,6 +123,11 @@ export function guardNoRegret(fieldIn: Field, o: NoRegretOptions): () => void {
   };
   const onKeyUp = (e: KeyboardEvent) => o.onKey?.(e, 'up');
   const onBeforeInput = (e: InputEvent) => {
+    // 手機虛擬鍵盤的退格不走 keydown，從這裡進來
+    if (e.inputType === 'deleteContentBackward' && o.onBackspace?.()) {
+      e.preventDefault();
+      return;
+    }
     const b = blockedInput(e.inputType || '', m);
     if (b !== null) {
       e.preventDefault();

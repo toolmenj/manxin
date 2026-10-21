@@ -3,7 +3,7 @@
  */
 import type { ReceiveDTO } from '@manxin/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BASE_ROUTES, counterOf, fakeApi, httpError, renderPage, sheetOf } from '../test/fakeApi.tsx';
 import { ReceivePage } from './Receive.tsx';
 
@@ -25,7 +25,7 @@ function dto(o: Partial<ReceiveDTO['recv']> = {}, extra: Partial<ReceiveDTO> = {
     fromName: '阿哲',
     office: '巷口郵筒',
     sentAt: Date.UTC(2026, 9, 10),
-    pkg,
+    pkg: { ...pkg, efont: 'kai', efontUrl: null },
     recv: {
       entered: false,
       opened: false,
@@ -103,5 +103,31 @@ describe('收信', () => {
     });
     renderPage(<ReceivePage />, '/r/' + TOKEN, '/r/:token', null);
     expect(await screen.findByText('信已經退回了')).toBeInTheDocument();
+  });
+});
+
+describe('收信的開場與收尾', () => {
+  const hostAnims = (spy: { mock: { calls: unknown[][]; contexts: unknown[] } }) =>
+    spy.mock.calls.filter((_c, i) => (spy.mock.contexts[i] as Element | undefined)?.id === 'rvEnv').map((c) => c[0] as Keyframe[]);
+
+  it('還沒拆的信：第一次看到時信落到桌上（只播一次，不擋翻面）', async () => {
+    const spy = vi.spyOn(Element.prototype, 'animate');
+    fakeApi({ ...BASE_ROUTES, 'GET /r/:t': dto(), 'POST /r/:t/enter': dto({ entered: true }) });
+    renderPage(<ReceivePage />, '/r/' + TOKEN, '/r/:token', null);
+    await screen.findByText('阿哲寄來的信');
+    await waitFor(() => expect(hostAnims(spy).length).toBe(1));
+    expect(hostAnims(spy)[0]![0]!.opacity).toBe(0);
+    fireEvent.click(screen.getByRole('button', { name: '翻到背面' }));
+    expect(await screen.findByRole('button', { name: '開信刀' })).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it('已經拆開的信：不再播落到桌上的開場', async () => {
+    const spy = vi.spyOn(Element.prototype, 'animate');
+    fakeApi({ ...BASE_ROUTES, 'GET /r/:t': dto({ entered: true, opened: true, method: 'knife' }) });
+    renderPage(<ReceivePage />, '/r/' + TOKEN, '/r/:token', null);
+    await screen.findByRole('button', { name: '倒出來' });
+    expect(hostAnims(spy)).toHaveLength(0);
+    spy.mockRestore();
   });
 });

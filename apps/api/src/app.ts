@@ -14,6 +14,7 @@ import { devRoutes } from './routes/dev.ts';
 import { postRoutes } from './routes/post.ts';
 import { receiveRoutes } from './routes/receive.ts';
 import { shipmentRoutes } from './routes/shipments.ts';
+import { templateRoutes } from './routes/templates.ts';
 import { SESSION_COOKIE, userBySession } from './services/auth.ts';
 import { CountyTableCourier, type CourierProvider } from './services/courier.ts';
 import { startWorker } from './services/jobs.ts';
@@ -107,6 +108,7 @@ export async function buildApp(o: BuildOptions): Promise<FastifyInstance> {
   await app.register(postRoutes);
   await app.register(shipmentRoutes);
   await app.register(receiveRoutes);
+  await app.register(templateRoutes);
   if (!cfg.isProd) await app.register(devRoutes);
 
   if (o.startWorker ?? cfg.workerInline) {

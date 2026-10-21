@@ -27,6 +27,7 @@ import type { Db } from '../db/client.ts';
 import { attachments, collectionItems, shipments } from '../db/schema.ts';
 import { normEmail, roll, sha256 } from '../lib/crypto.ts';
 import { fail } from '../lib/errors.ts';
+import { customFontId, fontById, recvFontUrl } from './fonts.ts';
 import { attachmentDTO, currentSheet, sheetDTO } from './letters.ts';
 import { editsOf, statusInput, type Pkg, type ShipmentRow } from './shipments.ts';
 
@@ -59,13 +60,18 @@ async function receiveDTO(ctx: Ctx, db: Db, s: ShipmentRow, token: string): Prom
   if (recv.unfolded) {
     const sh = await currentSheet(db, s.letterId);
     const L = (await db.query.letters.findFirst({ where: (l, { eq }) => eq(l.id, s.letterId) }))!;
+    const sd = await sheetDTO(db, sh);
+    const fid = customFontId(sd.font);
     letter = {
-      sheet: await sheetDTO(db, sh),
+      sheet: { ...sd, fontUrl: fid ? recvFontUrl(token, fid) : null },
       attachments: atts ?? [],
       frontAttachmentId: L.frontAttachmentId,
     };
   }
-  const { efont: _f, ...pk } = pkg;
+  // D-028：信封上的字用寄出時信紙的字型（快照在 pkg.efont）；自訂字型附上用開信連結讀檔的網址
+  const efont = pkg.efont || 'kai';
+  const efid = customFontId(efont);
+  const pk = { ...pkg, efont, efontUrl: efid ? recvFontUrl(token, efid) : null };
   return { no: s.no, fromName: env.fromName, office: s.office, sentAt: s.sentAt.getTime(), pkg: pk, recv, letter, attachments: atts };
 }
 
@@ -177,6 +183,21 @@ export async function recipientAttachment(ctx: Ctx, token: string, attId: string
   // 信封外面看得到的（上傳的郵票、郵戳、信封圖）一開始就能看；信封裡的東西要倒出來之後
   if (!['stamp', 'postmark', 'skin'].includes(a!.purpose) && !(s.recv as RecvState).poured) fail(409, 'INVALID_STATE', '附件還在信封裡');
   return a!;
+}
+
+/**
+ * 收件人讀字型檔：只限這封信用到的字型（信封的 efont 一開始就看得到；信紙的字型要攤開之後）。
+ * 字型屬於寄件人，不看 letterId。
+ */
+export async function recipientFont(ctx: Ctx, token: string, fontId: string) {
+  const s = await byToken(ctx.db, token);
+  assertOpenable(ctx, s, await editsOf(ctx.db, s.id));
+  const pkg = s.pkg as Pkg;
+  let ok = customFontId(pkg.efont) === fontId;
+  if (!ok && (s.recv as RecvState).unfolded) ok = customFontId((await currentSheet(ctx.db, s.letterId)).font) === fontId;
+  const f = ok ? await fontById(ctx.db, fontId) : null;
+  if (!f || f.userId !== s.userId) fail(404, 'NOT_FOUND', '找不到這個字型');
+  return f!;
 }
 
 export async function getCollection(ctx: Ctx, email: string): Promise<CollectionDTO> {

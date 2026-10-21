@@ -52,6 +52,9 @@ describe('書寫端點只有追加', () => {
     ['POST', '/sheet/undo'],
     ['POST', '/sheet/erase'],
     ['POST', '/sheet/paste'],
+    ['DELETE', '/sheet/moves'],
+    ['PUT', '/sheet/moves'],
+    ['POST', '/sheet/overstrike'],
   ])('%s /letters/:id%s 不存在（404），內容不變', async (method, suffix) => {
     const id = await draft(t, me, '落子無悔');
     const r = await t.req(method, `/letters/${id}${suffix}`, me, method === 'DELETE' ? undefined : { text: 'x', chars: [] });

@@ -24,6 +24,11 @@ async function fastForward(page: Page, label: string) {
   await expect(page.locator('#toast')).toContainText('模擬時間');
 }
 
+/** 等元素上的動畫跑完再量位置（第一次量信紙時用；摺完後的放大動畫中按下去也要能摺，見第二摺） */
+async function settle(page: Page, sel: string) {
+  await page.locator(sel).evaluate((e) => Promise.all(e.getAnimations().map((a) => a.finished.catch(() => undefined))));
+}
+
 /** 拖一段（滑鼠按下 → 分幾步移動 → 放開） */
 async function drag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, steps = 12) {
   await page.mouse.move(from.x, from.y);
@@ -88,27 +93,44 @@ test('寫信 → 郵局 → 寄出 → 快轉 → 收信開信', async ({ page }
   await expect(page.locator('#toast')).toContainText('塞不進去');
 
   // 摺兩次：先從下緣往上摺到三分之一，再對摺
+  // 量位置前先把東西捲進畫面（右側表單填完時頁面可能已經往下捲，座標會變成負的）
+  // 第一摺：按在紙下緣「外面」8px（可抓範圍往紙外放寬 12px）
+  await page.locator('#ctFold .pk').scrollIntoViewIfNeeded();
+  await settle(page, '#ctFold .pk');
   let pk = (await page.locator('#ctFold .pk').boundingBox())!;
-  await drag(page, { x: pk.x + pk.width / 2, y: pk.y + pk.height - 3 }, { x: pk.x + pk.width / 2, y: pk.y + pk.height / 3 });
+  await drag(page, { x: pk.x + pk.width / 2, y: pk.y + pk.height + 8 }, { x: pk.x + pk.width / 2, y: pk.y + pk.height / 3 });
   await expect(page.locator('#foldInfo')).toHaveText('摺了 1 次。');
+  // 第二摺：不等摺完那下放大動畫（scale 1.04 → 1）停，馬上按在下緣外一點點
   pk = (await page.locator('#ctFold .pk').boundingBox())!;
-  await drag(page, { x: pk.x + pk.width / 2, y: pk.y + pk.height - 3 }, { x: pk.x + pk.width / 2, y: pk.y + 3 });
+  await drag(page, { x: pk.x + pk.width / 2, y: pk.y + pk.height + 4 }, { x: pk.x + pk.width / 2, y: pk.y + 3 });
+  await expect(page.locator('#foldInfo')).toHaveText('摺了 2 次。');
+  // 離紙太遠（超過 12px）不算抓到紙：不會多摺一次
+  pk = (await page.locator('#ctFold .pk').boundingBox())!;
+  await drag(page, { x: pk.x + pk.width / 2, y: pk.y + pk.height + 30 }, { x: pk.x + pk.width / 2, y: pk.y + 3 });
+  await page.waitForTimeout(600);
   await expect(page.locator('#foldInfo')).toHaveText('摺了 2 次。');
   await page.getByRole('button', { name: '放進信封', exact: true }).click();
   await expect(page.locator('#toast')).toContainText('放進去了');
   await page.getByRole('button', { name: '封口', exact: true }).click();
   await expect(page.locator('#toast')).toContainText('封好了', { timeout: 20_000 });
 
-  // 貼郵票：拖到信封右上角
+  // 貼郵票：拖到信封右上角（等封口翻面的動畫停下來，信封和郵票都在畫面裡）
+  await page.evaluate(() => scrollTo(0, 0));
+  await expect.poll(async () => (await page.locator('#ctEnv .envf').boundingBox())?.width ?? 0).toBeGreaterThan(200);
   const env = (await page.locator('#ctEnv .envf').boundingBox())!;
   const st = (await page.locator('#trayStamp').boundingBox())!;
   await drag(page, { x: st.x + st.width / 2, y: st.y + st.height / 2 }, { x: env.x + env.width * 0.85, y: env.y + env.height * 0.3 });
   await expect(page.getByText('郵票貼好了。')).toBeVisible();
 
   // 投郵筒：把信封拖進投遞口
+  await page.evaluate(() => scrollTo(0, 0));
   const slit = (await page.locator('#ctBox .slit').boundingBox())!;
   const ev = (await page.locator('#ctEnv').boundingBox())!;
   await drag(page, { x: ev.x + ev.width / 2, y: ev.y + ev.height / 2 }, { x: slit.x + slit.width / 2, y: slit.y + slit.height / 2 }, 20);
+  // 信滑進投信口、郵筒晃一下之後，是「郵差來收信 → 單號」的過場；按「略過」讓測試不用等
+  await expect(page.locator('#ctBox .pbx')).toBeVisible();
+  await page.locator('.scene .skip').click({ timeout: 15_000 });
+  await expect(page.locator('.scene')).toHaveCount(0, { timeout: 10_000 });
   await page.waitForURL(/\/track\/RR\d{9}TW/, { timeout: 30_000 });
   const no = page.url().split('/').pop()!;
   await expect(page.locator('.detail .chip').first()).toHaveText('運送中');

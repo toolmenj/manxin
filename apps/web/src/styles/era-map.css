@@ -1,0 +1,83 @@
+/* ===== 第四種風格：藏寶圖（暗紅木板牆、釘在牆上的舊地圖、虛線路徑、咖啡漬、拉過去的繩子） =====
+   整頁內容（main）就是那張地圖：米黃紙、圓點污漬、摺痕格線、咖啡杯印、外框一圈紅白相間的刻度邊。 */
+:root[data-era="map"]{
+  --desk:#6A3530; --surface:#EFE8C8; --surface-2:#E0D3A8; --ink:#4A1916; --muted:#7E5248; --line:#4A1916;
+  --post:#5C1F1C; --post-ink:#F1E9C9; --seal:#A2392C; --seal-ink:#F6EED2; --mustard:#A98348;
+  --kraft:#C9A97A; --kraft-ink:#3E1A14;
+  --paper:#EEE7C7; --paper-ink:#3A1512; --rule:#B79C8E; --margin:#A2392C; --bahang:#A2392C;
+  --warn-bg:#E6C9BD; --warn-ink:#5C1F1C;
+  --map:#E8E1BE; --poster:#E4CBC0; --plank:#3A1715; --string:#EFE6C8;
+  --shadow:4px 5px 0 rgba(40,10,8,.4);
+  --ui:"Iansui","LXGW WenKai TC",serif; --display:"Iansui","LXGW WenKai TC",serif; --hand:"Iansui","LXGW WenKai TC",serif; --mono:"Iansui","LXGW WenKai TC",serif;
+}
+:root[data-era="map"] :focus-visible{outline-color:var(--seal)}
+
+/* 牆：直立木板、深色接縫、木紋、幾顆釘子 */
+:root[data-era="map"] body{font-size:16px;background-color:var(--desk);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='420'%3E%3Cg stroke='%233A1715' stroke-width='3'%3E%3Crect x='0' y='-5' width='60' height='430' fill='%236E3832'/%3E%3Crect x='60' y='-5' width='60' height='430' fill='%23633029'/%3E%3Crect x='120' y='-5' width='60' height='430' fill='%236B352F'/%3E%3Crect x='180' y='-5' width='60' height='430' fill='%235F2E28'/%3E%3C/g%3E%3Cg fill='none' stroke='%234E221E' stroke-width='1.6' stroke-linecap='round' opacity='.75'%3E%3Cpath d='M14 20 C18 120 10 220 16 400'/%3E%3Cpath d='M40 60 C36 160 44 260 38 380'/%3E%3Cpath d='M80 10 C84 140 76 260 82 410'/%3E%3Cpath d='M104 90 q4 30 0 60'/%3E%3Cpath d='M138 30 C142 150 134 270 140 400'/%3E%3Cpath d='M162 120 q-5 40 0 80'/%3E%3Cpath d='M200 0 C204 130 196 250 202 420'/%3E%3Cpath d='M224 200 q4 40 0 90'/%3E%3Cellipse cx='152' cy='212' rx='5' ry='13'/%3E%3Cellipse cx='28' cy='300' rx='4' ry='10'/%3E%3C/g%3E%3Cg fill='%232A0F0D'%3E%3Ccircle cx='30' cy='14' r='2.6'/%3E%3Ccircle cx='150' cy='14' r='2.6'/%3E%3Ccircle cx='90' cy='226' r='2.6'/%3E%3Ccircle cx='210' cy='226' r='2.6'/%3E%3C/g%3E%3C/svg%3E");background-size:240px 420px;background-attachment:fixed}
+:root[data-era="map"] body::before{mix-blend-mode:multiply;background:radial-gradient(ellipse 85% 80% at 50% 45%,transparent 50%,rgba(30,6,4,.22) 85%,rgba(20,4,2,.42))}
+:root[data-era="map"] body::after{opacity:.1}
+
+/* 頁首：一塊深色木招牌 */
+:root[data-era="map"] .top{background:var(--plank) repeating-linear-gradient(90deg,transparent 0 118px,rgba(0,0,0,.35) 118px 121px);border-bottom:4px solid #240B09;box-shadow:0 4px 0 rgba(0,0,0,.35);color:#EDE3C4}
+:root[data-era="map"] .logo{font:400 34px/1 var(--display);color:var(--string);text-shadow:3px 3px 0 var(--seal),-1px -1px 0 #1A0605;transform:rotate(-3deg);display:inline-block}
+:root[data-era="map"] .motto{font:18px var(--display);color:#CDB79A}
+:root[data-era="map"] nav.tabs button{font:18px var(--display);color:#D9C6A6}
+:root[data-era="map"] nav.tabs button:hover{color:var(--string)}
+:root[data-era="map"] nav.tabs .n{color:#E7B9A8}
+:root[data-era="map"] nav.tabs button[aria-current="page"]{background:var(--poster);color:var(--ink);border:3px solid #240B09;border-radius:3px 9px 4px 11px;transform:rotate(-1.5deg);box-shadow:2px 3px 0 rgba(0,0,0,.45)}
+:root[data-era="map"] .clock{color:#CDB79A}
+:root[data-era="map"] #clockTxt{font:17px var(--display);color:var(--string)}
+:root[data-era="map"] .ff summary{color:var(--string);border:2px solid #CDB79A;border-radius:10px 4px 11px 5px}
+:root[data-era="map"] .ffm{color:var(--ink)}
+
+/* 地圖本體 */
+:root[data-era="map"] main{position:relative;isolation:isolate;margin:22px auto 48px;min-height:62vh;padding-inline:38px;padding-block:40px 80px;
+  background-color:var(--map);
+  background-image:
+    radial-gradient(circle at 86% 74%,transparent 0 92px,rgba(160,120,52,.32) 93px 98px,transparent 100px),
+    radial-gradient(circle at 86.6% 75%,transparent 0 80px,rgba(160,120,52,.16) 81px 83px,transparent 85px),
+    radial-gradient(ellipse 30% 22% at 8% 12%,rgba(170,128,84,.28),transparent 70%),
+    radial-gradient(ellipse 26% 18% at 94% 30%,rgba(170,128,84,.22),transparent 70%),
+    radial-gradient(circle,rgba(150,108,92,.24) 0 9px,transparent 10px),
+    radial-gradient(circle,rgba(150,108,92,.16) 0 5px,transparent 6px),
+    linear-gradient(90deg,rgba(74,25,22,.12) 1.5px,transparent 1.5px),
+    linear-gradient(rgba(74,25,22,.12) 1.5px,transparent 1.5px);
+  background-size:100% 100%,100% 100%,100% 100%,100% 100%,130px 118px,86px 94px,33.34% 100%,100% 440px;
+  background-position:0 0,0 0,0 0,0 0,20px 30px,64px 76px,0 0,0 0;
+  border:4px solid var(--line);border-radius:22px 6px 26px 8px/8px 24px 6px 20px;
+  outline:9px dashed var(--line);outline-offset:-17px;
+  box-shadow:6px 8px 0 rgba(30,6,4,.45),0 18px 40px rgba(20,4,2,.45)}
+/* 斜斜拉過整張地圖的兩條繩子 */
+:root[data-era="map"] main::before,:root[data-era="map"] main::after{content:"";position:absolute;left:-14px;right:-14px;height:3px;border-radius:2px;background:var(--string);box-shadow:0 2px 0 rgba(50,15,12,.35),0 -1px 0 rgba(255,255,255,.3);pointer-events:none;z-index:5;opacity:.9}
+:root[data-era="map"] main::before{top:21px;transform:rotate(-.7deg)}
+:root[data-era="map"] main::after{bottom:30px;transform:rotate(.5deg)}
+@media (max-width:640px){:root[data-era="map"] main{margin:12px 6px 32px;padding-inline:26px;outline-width:6px;outline-offset:-13px}}
+
+/* 地圖上的東西：粗紅褐線框、像手畫的歪角 */
+:root[data-era="map"] :is(.panel,.place,.ship,.mail,.calc,.alert,.mbox,.btn,.seg,select,.search input,.editbox input,.map,.fixbar,.uenv,.front,.eo){border:3px solid var(--line);border-radius:14px 6px 16px 5px/6px 15px 5px 13px;box-shadow:3px 4px 0 rgba(74,25,22,.35)}
+:root[data-era="map"] .btn{background:var(--surface);color:var(--ink);font-size:16px}
+:root[data-era="map"] .btn.primary{background:var(--post);color:var(--post-ink)}
+:root[data-era="map"] .btn.red{background:var(--seal);color:var(--seal-ink)}
+:root[data-era="map"] .btn.ghost{background:transparent}
+:root[data-era="map"] .btn:active{transform:translate(2px,3px);box-shadow:1px 1px 0 rgba(74,25,22,.35)}
+:root[data-era="map"] .seg button+button{border-left:3px solid var(--line)}
+:root[data-era="map"] .seg button[aria-pressed="true"]{background:var(--post);color:var(--post-ink)}
+:root[data-era="map"] .top .seg{background:var(--poster);border-color:#240B09;box-shadow:2px 3px 0 rgba(0,0,0,.45)}
+:root[data-era="map"] .top .seg button{color:var(--ink)}
+:root[data-era="map"] .top .seg button+button{border-left-color:#240B09}
+:root[data-era="map"] .top .seg button[aria-pressed="true"]{color:var(--post-ink)}
+:root[data-era="map"] .h2{font:400 28px/1.2 var(--display);letter-spacing:.04em;transform:rotate(-1deg);display:inline-block}
+:root[data-era="map"] .label{font:16px var(--display);color:var(--seal);letter-spacing:.06em}
+:root[data-era="map"] .paper{box-shadow:0 0 0 3px var(--line),5px 7px 0 rgba(40,10,8,.4)}
+:root[data-era="map"] .chip{border:2px solid var(--line)}
+
+/* 首頁：大標像地名，流程是一條虛線路徑，小卡像貼在牆上的海報 */
+:root[data-era="map"] .hero-h{text-shadow:3px 3px 0 var(--poster),5px 5px 0 rgba(74,25,22,.25);transform:rotate(-2deg);letter-spacing:.08em}
+:root[data-era="map"] .flow li{border-top:5px dashed var(--line)}
+:root[data-era="map"] .fl-n{position:relative;border:3px dashed var(--seal);box-shadow:none;background:var(--map)}
+:root[data-era="map"] .flow li:last-child .fl-n{border:0;color:var(--seal);font-size:30px}
+:root[data-era="map"] .flow li:last-child .fl-n::after{content:"✕";position:absolute;font-size:44px;opacity:.18}
+:root[data-era="map"] .pick,:root[data-era="map"] .now{background:var(--poster);border:3px solid var(--line);border-radius:3px 10px 4px 12px;box-shadow:3px 4px 0 rgba(74,25,22,.35)}
+:root[data-era="map"] .now:nth-child(odd),:root[data-era="map"] .pick:nth-of-type(odd){rotate:-1deg}
+:root[data-era="map"] .now:nth-child(even),:root[data-era="map"] .pick:nth-of-type(even){rotate:1.2deg}
+:root[data-era="map"] .pick[aria-pressed="true"]{background:var(--surface);box-shadow:0 0 0 3px var(--seal),3px 4px 0 rgba(74,25,22,.35)}

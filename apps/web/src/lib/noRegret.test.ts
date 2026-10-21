@@ -176,6 +176,28 @@ describe('guardNoRegret：掛在輸入框上', () => {
   });
 });
 
+describe('onNav：方向鍵移動紙上的打字頭（書桌）', () => {
+  it('方向鍵、Home、End 交給 onNav；退格、Delete、Ctrl+Z 照樣擋，不會變成移動', () => {
+    const ta = document.createElement('textarea');
+    document.body.append(ta);
+    const onNav = vi.fn<(k: string) => boolean>(() => true);
+    const onText = vi.fn<(t: string) => void>();
+    const nag = vi.fn<(m: string) => void>();
+    const off = guardNoRegret(ta, { onText, nag, onNav });
+    for (const k of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End']) expect(key(ta, { key: k }).defaultPrevented).toBe(true);
+    expect(onNav.mock.calls.map((c) => c[0])).toEqual(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End']);
+    for (const k of [{ key: 'Backspace' }, { key: 'Delete' }, { key: 'z', ctrlKey: true }]) expect(key(ta, k).defaultPrevented).toBe(true);
+    expect(onNav).toHaveBeenCalledTimes(6);
+    expect(nag).toHaveBeenCalledTimes(3);
+    // Ctrl+方向鍵、組字中的方向鍵不給 onNav（組字中是在選字）
+    key(ta, { key: 'ArrowLeft', ctrlKey: true });
+    key(ta, { key: 'ArrowLeft', isComposing: true });
+    expect(onNav).toHaveBeenCalledTimes(6);
+    expect(onText).not.toHaveBeenCalled();
+    off();
+  });
+});
+
 describe('guardWritingArea：整個書寫區', () => {
   it('右鍵、複製、剪下、拖放都擋', () => {
     const div = document.createElement('div');

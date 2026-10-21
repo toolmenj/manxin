@@ -11,7 +11,8 @@ import { Empty, SheetThumb } from '../components/common.tsx';
 import { FlipCard } from '../components/DeskModals.tsx';
 import { ENVS, envBackHTML, envFrontHTML, paintZones, type ViewPkg } from '../lib/art.ts';
 import { anim, INOUT, RM } from '../lib/motion.ts';
-import { mountSheet, viewSheet, type ViewSheet } from '../lib/paper.ts';
+import { loadFont, mountSheet, viewSheet, type ViewSheet } from '../lib/paper.ts';
+import { arriveLetter, openMouth } from '../lib/scenes.ts';
 import { DESKS, rememberToken } from '../lib/prefs.ts';
 import { $, $$, el, hash, jit, rng, spaced } from '../lib/util.ts';
 import { useApp } from '../state/app.tsx';
@@ -31,7 +32,8 @@ export function recvPkg(dto: ReceiveDTO, token: string): ViewPkg {
     pmPos: p.pmPos,
     pmAt: p.pmAt,
     etxt: p.etxt,
-    efont: 'kai',
+    // D-028：信封上的字跟信紙同一個字型；自訂字型用開信連結載入（舊資料沒有 efont 就用文楷）
+    efont: loadFont(p.efont || 'kai', p.efontUrl),
     folds: p.folds,
     pack: p.pack,
     rot: p.rot,
@@ -57,7 +59,7 @@ function tearPoly(seed: string, x: number, left: boolean): string {
 }
 
 /** 撕成兩半的信封與信紙：拖動碎片自己拼，右上角的圓鈕可以轉方向（readOnly：收藏裡只看） */
-export function renderPieces(box: HTMLElement, dto: ReceiveDTO, token: string, era: 'minguo' | '80s' | 'doodle', onMove?: (p: Piece) => void): void {
+export function renderPieces(box: HTMLElement, dto: ReceiveDTO, token: string, era: 'minguo' | '80s' | 'doodle' | 'map', onMove?: (p: Piece) => void): void {
   const r = dto.recv,
     pk = recvPkg(dto, token),
     sheet = recvSheet(dto, token);
@@ -159,6 +161,7 @@ function ReceiveView({ token }: { token: string }) {
   const dtoRef = useRef(dto);
   dtoRef.current = dto;
   const pieceSave = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arrived = useRef(false);
   const pendingPieces = useRef<Map<string, Piece>>(new Map());
 
   const fail = useCallback(
@@ -231,6 +234,16 @@ function ReceiveView({ token }: { token: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envKey]);
+
+  /* 第一次看到這封信（還沒拆）：信輕輕落到桌上。只是表現，不擋任何操作 */
+  useEffect(() => {
+    if (!dto || arrived.current) return;
+    arrived.current = true;
+    if (dto.recv.opened || dto.recv.torn) return;
+    const h = envRef.current;
+    if (h) void arriveLetter(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dto ? 1 : 0]);
 
   /* ---------- 倒出來的東西、攤開的信 ---------- */
   const outKey = dto ? JSON.stringify([r?.poured, r?.unfolded, dto.attachments?.length, !!sheet, avail]) : '';
@@ -379,7 +392,8 @@ function ReceiveView({ token }: { token: string }) {
       calm();
       try {
         const d = await api.recvOpen(token, tool, pathD());
-        await anim(ev, [{ translate: '0 0' }, { translate: '0 -4px' }, { translate: '0 0' }], { d: 320 });
+        // 已經送出、伺服器說開了；這裡只是收尾的表現：易撕帶掀走／封口掀起來
+        await openMouth(ev);
         setDto(d);
         void app.refreshCounts();
         toast(d.recv.rough ? '撕開了。封口撕下半層紙，留下毛毛的邊。' : tool === 'knife' ? '劃開了。' : En.cl === 'strip' ? '易撕帶拉開了。' : '撕開了。');

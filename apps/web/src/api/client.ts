@@ -4,10 +4,12 @@
  * - 所有請求走 /api 前綴（Vite proxy 去掉前綴再轉給後端），避免和前端網址（/r/:token、/track/:no）撞名。
  * - 沒有 body 的 POST 不帶 content-type（Fastify 會把空的 JSON body 當成錯誤）。
  * - 錯誤一律丟 ApiError，code 對應 docs/api.md 的錯誤碼。
- * - 書寫只有三種追加操作（chars／marks／strokes）與空白紙的紙本匯入；這裡刻意沒有任何修改或刪除內容的函式。
+ * - 書寫只有追加操作（chars／marks／strokes，以及只移動打字頭的 moves）與空白紙的紙本匯入；這裡刻意沒有任何修改或刪除內容的函式。
  */
 import type {
+  AppendMeta,
   AttachmentDTO,
+  Cell,
   CollectionDTO,
   CounterDTO,
   DiscardState,
@@ -15,10 +17,12 @@ import type {
   EnvelopeKind,
   ErrorCode,
   FoldEdge,
+  FontDTO,
   LetterDTO,
   LetterStatus,
   MailboxColor,
   MarkTool,
+  PaperTemplateDTO,
   PlaceId,
   Piece,
   Pos,
@@ -107,6 +111,8 @@ const enc = encodeURIComponent;
 export const fileUrl = (url: string): string => (url.startsWith(API_BASE + '/') ? url : API_BASE + url);
 export const attachmentUrl = (id: string): string => `${API_BASE}/attachments/${id}`;
 export const recvAttachmentUrl = (token: string, id: string): string => `${API_BASE}/r/${enc(token)}/attachments/${id}`;
+/** 內建信紙圖樣範本的 SVG（公開） */
+export const paperTemplateUrl = (id: string): string => `${API_BASE}/paper-templates/${enc(id)}.svg`;
 
 export interface PlacesDTO {
   places: { id: PlaceId; name: string; kind: string; m: number; minutes: Record<TravelMode, number> }[];
@@ -129,6 +135,7 @@ export interface SheetSettings {
   mode?: WriteMode;
   font?: string;
   bgAttachmentId?: string | null;
+  bgTemplate?: string | null;
 }
 
 export interface CounterPatch {
@@ -143,6 +150,12 @@ export interface CounterPatch {
 }
 
 export type UploadPurpose = 'attachment' | 'scan' | 'bg' | 'front' | 'stamp' | 'postmark' | 'skin';
+
+/** 追加請求的附帶資訊：沒給的欄位不送（舊的呼叫可以只給 seq） */
+const metaOf = (m?: AppendMeta | number): AppendMeta => {
+  const o = typeof m === 'number' ? { seq: m } : (m ?? {});
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as AppendMeta;
+};
 
 export const api = {
   /* 帳號 */
@@ -163,10 +176,12 @@ export const api = {
   patchSheet: (id: string, b: SheetSettings) => patch<SheetDTO>(`/letters/${id}/sheet`, b),
 
   /* 信紙內容：只有追加 */
-  appendChars: (id: string, text: string, seq?: number) => post<SheetDTO>(`/letters/${id}/sheet/chars`, seq === undefined ? { text } : { text, seq }),
-  appendMark: (id: string, from: number, to: number, tool: MarkTool, seq?: number) =>
-    post<SheetDTO>(`/letters/${id}/sheet/marks`, seq === undefined ? { from, to, tool } : { from, to, tool, seq }),
-  appendStroke: (id: string, stroke: Stroke, seq?: number) => post<SheetDTO>(`/letters/${id}/sheet/strokes`, seq === undefined ? { stroke } : { stroke, seq }),
+  appendChars: (id: string, text: string, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/chars`, { text, ...metaOf(meta) }),
+  /** at：要塗改的字（第幾個字）的清單 */
+  appendMark: (id: string, at: number[], tool: MarkTool, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/marks`, { at, tool, ...metaOf(meta) }),
+  /** 移動打字頭（不寫字、不蓋字） */
+  appendMove: (id: string, at: Cell, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/moves`, { at, ...metaOf(meta) }),
+  appendStroke: (id: string, stroke: Stroke, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/strokes`, { stroke, ...metaOf(meta) }),
   scan: (id: string, attachmentId: string) => post<SheetDTO>(`/letters/${id}/sheet/scan`, { attachmentId }),
 
   transcribe: (id: string) => post<LetterDTO>(`/letters/${id}/transcribe`),
@@ -183,6 +198,15 @@ export const api = {
     return post<AttachmentDTO>(`/letters/${id}/attachments?purpose=${purpose}`, fd);
   },
   takeOut: (id: string, attId: string) => post<LetterDTO>(`/letters/${id}/attachments/${attId}/take-out`),
+
+  /* 自訂字型與信紙範本 */
+  fonts: () => get<{ fonts: FontDTO[] }>('/fonts'),
+  uploadFont: (file: Blob, name: string) => {
+    const fd = new FormData();
+    fd.append('file', file, name);
+    return post<FontDTO>('/fonts', fd);
+  },
+  paperTemplates: () => get<{ templates: PaperTemplateDTO[] }>('/paper-templates'),
 
   /* 郵局 */
   startTrip: (id: string, b: { place: PlaceId; mode: TravelMode; box: MailboxColor }) => post<TripDTO>(`/letters/${id}/trip`, b),

@@ -11,13 +11,26 @@ import { ENVS, envBackHTML, envFrontHTML, paintZones, PMS, rubberSVG, STAMPS, st
 import { dragPiece } from '../lib/drag.ts';
 import { readImg, toJpeg } from '../lib/image.ts';
 import { ownSheet } from '../lib/letters.ts';
-import { anim, INOUT, wait } from '../lib/motion.ts';
+import { abortScenes, anim, INOUT, wait } from '../lib/motion.ts';
 import { ENVELOPE_MESSAGES, guardNoRegret } from '../lib/noRegret.ts';
-import { mountSheet } from '../lib/paper.ts';
-import { postedScene } from '../lib/scenes.ts';
+import { loadFont, mountSheet } from '../lib/paper.ts';
+import { postboxHTML, slideIntoSlot } from '../lib/postbox.ts';
+import { postScene } from '../lib/scenes.ts';
 import { $, $$, el, jit, okMail } from '../lib/util.ts';
 import { useApp } from '../state/app.tsx';
 import { clack } from '../lib/typewriter.ts';
+
+/** 摺信：手指（滑鼠）落在紙外這麼多 px 之內，也算抓到紙邊 */
+export const FOLD_REACH = 12;
+
+interface FoldGeo {
+  pkEl: HTMLElement;
+  face: HTMLElement;
+  sc: number;
+  /** 信紙中心在外框（#ctFold）裡的位置 */
+  cx: number;
+  cy: number;
+}
 
 const MISSING_LABEL: Record<string, string> = { ADDRESS: '確認地址', INSERT: '把信放進信封', SEAL: '封口', STAMP: '貼郵票' };
 
@@ -66,6 +79,15 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
   zoneRef.current = zone;
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const envSave = useRef<{ t: ReturnType<typeof setTimeout> | null; p: Promise<unknown> }>({ t: null, p: Promise.resolve() });
+  /** 還在櫃台（換頁後寄出的過場要收掉，也不再自動跳到追蹤頁） */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      abortScenes();
+    };
+  }, []);
 
   const id = L.id;
   const pc = c?.env === 'card';
@@ -94,8 +116,10 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
   );
 
   /* ---------- 信封正面 ---------- */
-  const pk = c ? counterPkg(c) : null;
-  const pkKey = c ? JSON.stringify([c, zone, prefs.era]) : '';
+  // D-028：信封上的字跟信紙同一個字型（自訂字型用 sheet.fontUrl 載入）
+  const efont = loadFont(L.sheet.font, L.sheet.fontUrl);
+  const pk = c ? { ...counterPkg(c), efont } : null;
+  const pkKey = c ? JSON.stringify([c, zone, prefs.era, efont]) : '';
   useLayoutEffect(() => {
     const ce = envRef.current;
     if (!ce || !c || !pk) return;
@@ -187,24 +211,31 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
       e,
       ev.innerHTML,
       async (cx, cy, g) => {
-        const b = $('#ctBox .slit')!.getBoundingClientRect();
+        const pbx = $('#ctBox .pbx'),
+          slit = $('#ctBox .slit');
+        if (!pbx || !slit) return false;
+        const b = slit.getBoundingClientRect();
         if (cx < b.left - 50 || cx > b.right + 50 || cy < b.top - 80 || cy > b.bottom + 80) return false;
+        // 先送出，動畫同時播（動畫只是表現，不等它）
         const posting = api.postLetter(id).then(
           (s) => ({ ok: true as const, s }),
           (err: unknown) => ({ ok: false as const, err }),
         );
-        await anim(g, [{ transform: g.style.transform, opacity: 1 }, { transform: 'perspective(500px) rotateX(70deg) scale(.35)', opacity: 0 }], { d: 850, e: INOUT });
-        void anim($('#ctBox .pbx'), [{ transform: 'none' }, { transform: 'translateY(3px) rotate(-1deg)' }, { transform: 'rotate(.5deg)' }, { transform: 'none' }], { d: 420 });
+        // 對準投信口 → 滑進去 → 郵筒晃一下
+        const back = await slideIntoSlot(g, pbx, prefs.era);
         const r = await posting;
         if (!r.ok) {
-          ev.style.visibility = '';
+          // 寄不出去：信從投信口抽回來，回到桌上
+          await back();
           const er = r.err;
           toast(isApiError(er) ? er.message : '寄不出去，請再試一次。');
-          return true;
+          return false;
         }
         void app.refreshCounts();
-        await postedScene(r.s.no);
-        nav('/track/' + r.s.no);
+        if (!alive.current) return true;
+        // 郵差來收信 → 單號（可略過）
+        await postScene({ no: r.s.no, box: trip.box, era: prefs.era });
+        if (alive.current) nav('/track/' + r.s.no);
         return true;
       },
       (g) => {
@@ -258,11 +289,23 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
   };
 
   /* ---------- 摺信：從邊緣往內拖，摺線落在邊緣和手指的正中間 ---------- */
+  // 手勢綁在外框（#ctFold）上而不是信紙上：摺完一次信紙會換新的元素，外框不會，所以
+  // - 上一摺還在送後端時按下去，先記住這一按，新的信紙一畫好就接著摺（不會「按了沒反應」）；
+  // - 位置用外框量（信紙的中心固定在外框正中間），不受摺完那下 scale 1.04 → 1 的放大動畫影響。
   const foldKey = c ? JSON.stringify([c.pack, c.folds, c.rot, c.inserted]) : '';
+  const foldGeo = useRef<FoldGeo | null>(null);
+  const foldBusy = useRef(false);
+  const foldBound = useRef<HTMLElement | null>(null);
+  const foldResume = useRef<() => void>(() => {});
   useLayoutEffect(() => {
     const box = foldRef.current,
       cc = cRef.current;
+    foldGeo.current = null;
     if (!box || !cc || cc.env === 'card' || !cc.pack) return;
+    if (foldBound.current !== box) {
+      foldBound.current = box;
+      bindFold(box);
+    }
     box.innerHTML = '';
     const info = $('#foldInfo');
     if (cc.inserted) {
@@ -279,8 +322,11 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
       h = (P.y1 - P.y0) * sc;
     const pkEl = el('div', 'pk');
     pkEl.style.cssText = `width:${w}px;height:${h}px;left:${aw / 2 - w / 2}px;top:${ah / 2 - h / 2}px;transform:rotate(${cc.rot ? 90 : 0}deg)`;
+    // 可抓的範圍比紙大一圈（FOLD_REACH）：手指不用落在紙的內側，按在紙邊外一點點也抓得到
+    const reach = el('i', 'pk-reach');
+    reach.style.cssText = `position:absolute;inset:-${FOLD_REACH}px`;
     const face = el('div', 'pk-face');
-    pkEl.append(face);
+    pkEl.append(reach, face);
     if (!cc.folds.length) {
       const th = el('div', 'pk-th');
       face.append(th);
@@ -294,43 +340,49 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
       box.append(pkEl);
     }
     if (info) info.textContent = cc.folds.length ? `摺了 ${cc.folds.length} 次。` : '還沒摺。按住信紙的邊緣往內拖。';
-    bindFold(pkEl, face, sc);
+    foldGeo.current = { pkEl, face, sc, cx: aw / 2, cy: ah / 2 };
+    if (!foldBusy.current) foldResume.current();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [foldKey]);
 
-  function bindFold(pkEl: HTMLElement, face: HTMLElement, sc: number) {
-    let stt: { edge: FoldEdge; q0: { x: number; y: number }; w: number; h: number; f: number | null } | null = null,
-      fl: HTMLElement | null = null;
-    const local = (e: PointerEvent) => {
-      const r = pkEl.getBoundingClientRect(),
-        u = e.clientX - (r.left + r.width / 2),
-        v = e.clientY - (r.top + r.height / 2);
+  function bindFold(box: HTMLElement) {
+    let stt: { edge: FoldEdge; q0: { x: number; y: number }; w: number; h: number; f: number | null; g: FoldGeo } | null = null,
+      fl: HTMLElement | null = null,
+      /** 上一摺還在送的時候按下去的那一下（紙換好再接著摺） */
+      held: { id: number; x0: number; y0: number; x: number; y: number; up: boolean } | null = null;
+    /** 以信紙中心為原點的座標（信紙轉 90° 時換回信紙自己的方向） */
+    const local = (g: FoldGeo, x: number, y: number) => {
+      const r = box.getBoundingClientRect(),
+        u = x - (r.left + box.clientLeft + g.cx),
+        v = y - (r.top + box.clientTop + g.cy);
       return cRef.current?.rot ? { x: v, y: -u } : { x: u, y: v };
     };
-    pkEl.addEventListener('pointerdown', (e) => {
-      const cc = cRef.current;
-      if (!cc?.pack) return;
+    const begin = (x: number, y: number): boolean => {
+      const g = foldGeo.current,
+        cc = cRef.current;
+      if (!g || !cc?.pack) return false;
       if (cc.folds.length >= 6) {
         toast('太厚了，摺不動了。');
-        return;
+        return false;
       }
       const P = cc.pack,
-        w = (P.x1 - P.x0) * sc,
-        h = (P.y1 - P.y0) * sc,
-        q = local(e);
+        w = (P.x1 - P.x0) * g.sc,
+        h = (P.y1 - P.y0) * g.sc,
+        q = local(g, x, y);
+      if (Math.abs(q.x) > w / 2 + FOLD_REACH || Math.abs(q.y) > h / 2 + FOLD_REACH) return false;
       const d = { l: q.x + w / 2, r: w / 2 - q.x, t: q.y + h / 2, b: h / 2 - q.y },
         edge = (Object.entries(d) as [FoldEdge, number][]).sort((a, b) => a[1] - b[1])[0]!;
-      if (edge[1] > Math.max(30, Math.min(w, h) * 0.3)) return;
-      e.preventDefault();
-      pkEl.setPointerCapture?.(e.pointerId);
-      stt = { edge: edge[0], q0: q, w, h, f: null };
+      if (edge[1] > Math.max(30, Math.min(w, h) * 0.3)) return false;
+      stt = { edge: edge[0], q0: q, w, h, f: null, g };
       fl = el('div', 'pk-flap');
-      pkEl.append(fl);
-    });
-    pkEl.addEventListener('pointermove', (e) => {
+      g.pkEl.append(fl);
+      return true;
+    };
+    const move = (x: number, y: number) => {
       if (!stt || !fl) return;
-      const q = local(e),
-        { edge, w, h } = stt;
+      const { edge, w, h, g } = stt,
+        q = local(g, x, y),
+        face = g.face;
       if (edge === 'b' || edge === 't') {
         const ey = edge === 'b' ? h / 2 : -h / 2,
           f = Math.max(-h / 2 + 2, Math.min(h / 2 - 2, (ey + q.y) / 2)),
@@ -347,35 +399,78 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
         stt.f = f;
       }
       fl.className = 'pk-flap ' + edge;
-    });
-    const end = async (e: PointerEvent) => {
-      if (!stt) return;
-      const { edge, f, q0 } = stt,
-        q = local(e);
+    };
+    const drop = () => {
+      if (stt) stt.g.face.style.clipPath = '';
       stt = null;
-      face.style.clipPath = '';
       fl?.remove();
+      fl = null;
+    };
+    const end = async (x: number, y: number) => {
+      if (!stt) return;
+      const { edge, f, q0, g } = stt,
+        q = local(g, x, y);
+      drop();
       const cc = cRef.current;
       if (f == null || Math.hypot(q.x - q0.x, q.y - q0.y) < 10 || !cc?.pack) return;
       const P = cc.pack,
-        F = f / sc;
+        F = f / g.sc;
       const at = edge === 'b' || edge === 't' ? (P.y0 + P.y1) / 2 + F : (P.x0 + P.x1) / 2 + F;
+      foldBusy.current = true;
       try {
         const n = await api.fold(id, edge, at);
+        foldBusy.current = false;
         setC(n);
         requestAnimationFrame(() => {
           const np = $('#ctFold .pk');
           if (np) void anim(np, [{ scale: '1.04' }, { scale: '1' }], { d: 320 });
         });
       } catch (err) {
+        foldBusy.current = false;
         toast((err as Error).message);
+        foldResume.current();
       }
     };
-    pkEl.addEventListener('pointerup', (e) => void end(e));
-    pkEl.addEventListener('pointercancel', () => {
-      stt = null;
-      face.style.clipPath = '';
-      fl?.remove();
+    foldResume.current = () => {
+      if (!held || stt) return;
+      const h = held;
+      held = null;
+      if (!begin(h.x0, h.y0)) return;
+      move(h.x, h.y);
+      if (h.up) void end(h.x, h.y);
+    };
+    box.addEventListener('pointerdown', (e) => {
+      if (stt || !(e.target as Element | null)?.closest?.('.pk')) return;
+      if (foldBusy.current) {
+        e.preventDefault();
+        box.setPointerCapture?.(e.pointerId);
+        held = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, up: false };
+        return;
+      }
+      if (!begin(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      box.setPointerCapture?.(e.pointerId);
+    });
+    box.addEventListener('pointermove', (e) => {
+      if (held && held.id === e.pointerId && !held.up) {
+        held.x = e.clientX;
+        held.y = e.clientY;
+        return;
+      }
+      move(e.clientX, e.clientY);
+    });
+    box.addEventListener('pointerup', (e) => {
+      if (held && held.id === e.pointerId) {
+        held.x = e.clientX;
+        held.y = e.clientY;
+        held.up = true;
+        return;
+      }
+      void end(e.clientX, e.clientY);
+    });
+    box.addEventListener('pointercancel', () => {
+      held = null;
+      drop();
     });
   }
 
@@ -588,10 +683,7 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
             <textarea ref={eimeRef} id="eime" className="ime" aria-label="在信封上打字" autoComplete="off" spellCheck={false} />
           </div>
           <div className="ct-box" id="ctBox" ref={boxRef}>
-            <div className="pbx" style={{ background: trip.box === 'red' ? '#B3372B' : '#1E6A4A' }}>
-              <div className="slit"></div>
-              <div className="t">{trip.box === 'red' ? '限時' : '郵政'}</div>
-            </div>
+            <div className="pbx-host" dangerouslySetInnerHTML={{ __html: postboxHTML(trip.box, prefs.era) }} />
             <span className="hint">都準備好了，把信封拖進投遞口。</span>
           </div>
         </div>

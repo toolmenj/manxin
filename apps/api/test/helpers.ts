@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../src/app.ts';
 import { Clock } from '../src/clock.ts';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, type Config } from '../src/config.ts';
 import { connectPg, connectPglite, type DbHandle } from '../src/db/client.ts';
 import { devOutbox } from '../src/db/schema.ts';
 import { runDueJobs } from '../src/services/jobs.ts';
@@ -27,18 +27,24 @@ export interface TestApp {
 
 const TABLES = [
   'dev_outbox', 'scheduled_jobs', 'collection_items', 'email_edits', 'shipments', 'envelope_ops', 'counters', 'trips',
-  'attachments', 'sheet_ops', 'sheets', 'letters', 'sessions', 'login_tokens', 'users',
+  'fonts', 'attachments', 'sheet_ops', 'sheets', 'letters', 'sessions', 'login_tokens', 'users',
 ];
 
-export async function makeApp(startIso = '2026-10-14T10:00'): Promise<TestApp> {
+export async function makeApp(startIso = '2026-10-14T10:00', over: Partial<Config> = {}): Promise<TestApp> {
   const url = process.env.TEST_DATABASE_URL;
   const h = url ? await connectPg(url) : await connectPglite();
   await h.migrate();
-  if (url) await h.db.execute(sql.raw(`TRUNCATE ${TABLES.join(', ')} RESTART IDENTITY CASCADE`));
+  // 落子無悔的觸發器擋 TRUNCATE；測試清表要在同一個交易裡明說
+  if (url)
+    await h.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT set_config('manxin.allow_truncate', 'on', true)`);
+      await tx.execute(sql.raw(`TRUNCATE ${TABLES.join(', ')} RESTART IDENTITY CASCADE`));
+    });
   let base = taipei(startIso);
   const clock = new Clock(true, 0, () => base);
   const cfg = loadConfig({ NODE_ENV: 'test', APP_SECRET: 'test-secret' } as NodeJS.ProcessEnv, {
     uploadDir: mkdtempSync(path.join(tmpdir(), 'manxin-up-')),
+    ...over,
   });
   const app = await buildApp({ cfg, db: h.db, clock, startWorker: false, logger: false });
   await app.ready();

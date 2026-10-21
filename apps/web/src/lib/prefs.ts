@@ -1,17 +1,18 @@
 /**
- * 個人偏好（年代風格、書桌、打字機種類、看反字、打字聲、筆與墨色）。只存在這個瀏覽器（localStorage）。
+ * 個人偏好（年代風格、書桌、打字機種類、打字聲、筆與墨色）。只存在這個瀏覽器（localStorage）。
  * 讀寫都包 try/catch：無痕視窗或儲存被封鎖時照常運作，只是不記得。
  */
 import type { Era } from './time.ts';
 
 export type DeskKind = 'wood' | 'white' | 'school';
-export type TwMode = 'keys' | 'tw' | 'cn';
+/** keys＝電腦輸入法、py＝拼音鍵盤（簡體）。舊版的 tw／cn（中文打字機字盤）已移除，讀到時退回 keys */
+export type TwMode = 'keys' | 'py';
+export const TW_MODES: TwMode[] = ['keys', 'py'];
 
 export interface Prefs {
   era: Era;
   desk: DeskKind;
   twMode: TwMode;
-  trayMirror: boolean;
   sound: boolean;
   pen: { pen: 'fountain' | 'ball' | 'pencil'; color: string };
   postSel: { place: 'box' | 'po' | 'main'; mode: 'walk' | 'bike' | 'car'; box: 'green' | 'red' };
@@ -23,7 +24,6 @@ export const DEFAULT_PREFS: Prefs = {
   era: '80s',
   desk: 'wood',
   twMode: 'keys',
-  trayMirror: false,
   sound: true,
   pen: { pen: 'fountain', color: '#1F2F4F' },
   postSel: { place: 'box', mode: 'walk', box: 'green' },
@@ -35,12 +35,14 @@ export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
-    const p = JSON.parse(raw) as Partial<Prefs>;
+    // trayMirror（字盤的「看反字」）是舊版欄位，字盤移除後丟掉
+    const { trayMirror: _old, ...p } = JSON.parse(raw) as Partial<Prefs> & { trayMirror?: unknown };
     return {
       ...DEFAULT_PREFS,
       ...p,
-      era: (['80s', 'minguo', 'doodle'] as const).includes(p.era as Era) ? (p.era as Era) : DEFAULT_PREFS.era,
+      era: (['80s', 'minguo', 'doodle', 'map'] as const).includes(p.era as Era) ? (p.era as Era) : DEFAULT_PREFS.era,
       desk: (['wood', 'white', 'school'] as const).includes(p.desk as DeskKind) ? (p.desk as DeskKind) : DEFAULT_PREFS.desk,
+      twMode: TW_MODES.includes(p.twMode as TwMode) ? (p.twMode as TwMode) : DEFAULT_PREFS.twMode,
       pen: { ...DEFAULT_PREFS.pen, ...(p.pen ?? {}) },
       postSel: { ...DEFAULT_PREFS.postSel, ...(p.postSel ?? {}) },
     };
@@ -67,6 +69,7 @@ export const ERA_INFO: Record<Era, [string, string, string, string, string]> = {
   '80s': ['八〇年代', '磨石子地、郵局綠招牌、標籤機貼條', '#2D5E44', '#E2B13C', '#D8C597'],
   minguo: ['民國初年', '宣紙、朱印、八行箋直書', '#B03A2E', '#211A10', '#EADBB4'],
   doodle: ['手繪塗鴉', '暗褐石頭地、粗黑歪線', '#2A1E16', '#B3302A', '#EFE2C4'],
+  map: ['藏寶圖', '木板牆、舊地圖、虛線路徑、咖啡漬', '#5C1F1C', '#A58374', '#E8E1BE'],
 };
 
 export const DESK_SW: Record<DeskKind, string> = {

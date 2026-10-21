@@ -83,6 +83,7 @@ export function Header() {
               ['80s', '八〇年代'],
               ['minguo', '民國初年'],
               ['doodle', '手繪塗鴉'],
+              ['map', '藏寶圖'],
             ] as [Era, string][]
           ).map(([v, l]) => (
             <button key={v} type="button" data-v={v} aria-pressed={app.prefs.era === v} onClick={() => void app.switchEra(v)}>

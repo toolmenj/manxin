@@ -47,13 +47,16 @@ describe('API client', () => {
 
   it('書寫只有追加：標記與筆畫也是 POST，沒有任何修改或刪除內容的函式', async () => {
     const calls = mockFetch(201, {});
-    await api.appendMark('L1', 0, 3, 's2', 5);
+    await api.appendMark('L1', [0, 1, 3], 's2', { seq: 5, sheetId: 'S1', opId: 'O1' });
     await api.appendStroke('L1', { pen: 'ball', color: '#1A1A1A', pts: [[0.1, 0.2, 0.5]] });
+    await api.appendMove('L1', [3, 4], 6);
     expect(calls.map((c) => [c.init.method, c.url])).toEqual([
       ['POST', '/api/letters/L1/sheet/marks'],
       ['POST', '/api/letters/L1/sheet/strokes'],
+      ['POST', '/api/letters/L1/sheet/moves'],
     ]);
-    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ from: 0, to: 3, tool: 's2', seq: 5 });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ at: [0, 1, 3], tool: 's2', seq: 5, sheetId: 'S1', opId: 'O1' });
+    expect(JSON.parse(String(calls[2]!.init.body))).toEqual({ at: [3, 4], seq: 6 });
     const names = Object.keys(api).join(' ');
     expect(names).not.toMatch(/delete|remove|undo|erase|update(Chars|Sheet|Text)/i);
   });

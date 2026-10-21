@@ -181,7 +181,7 @@ function CollLetter({ it }: { it: LetterItem }) {
   );
 }
 
-function CollView({ dto, token, era }: { dto: ReceiveDTO; token: string; era: 'minguo' | '80s' | 'doodle' }) {
+function CollView({ dto, token, era }: { dto: ReceiveDTO; token: string; era: 'minguo' | '80s' | 'doodle' | 'map' }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const v = ref.current;

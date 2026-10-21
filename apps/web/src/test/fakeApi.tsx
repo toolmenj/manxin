@@ -58,6 +58,8 @@ export const BASE_ROUTES = {
   'GET /tomb': { sheets: [], unsent: [] },
   'GET /collection': { letters: [], stamps: [], waxes: [] },
   'GET /dev/outbox': { mails: [] },
+  'GET /fonts': { fonts: [] },
+  'GET /paper-templates': { templates: [] },
   'GET /letters': (_b: unknown, u: URL) => ({ letters: u.searchParams.get('status') === 'shelved' ? [] : [] }),
 };
 
@@ -68,7 +70,9 @@ export function sheetOf(text: string, o: Partial<SheetDTO> = {}): SheetDTO {
     style: 'lined',
     mode: 'type',
     font: 'typewriter',
+    fontUrl: null,
     bgAttachmentId: null,
+    bgTemplate: null,
     seq: text ? 1 : 0,
     chars: [...text].map((c) => ({ c, m: [] })),
     strokes: [],

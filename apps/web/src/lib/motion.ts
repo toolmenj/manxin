@@ -36,7 +36,24 @@ export interface Scene {
   say: HTMLElement;
 }
 
-/** 全螢幕場景（寄信、拆信、丟垃圾桶），右下角有「略過」 */
+/** 場景收掉時要一起拆掉的東西（鍵盤監聽） */
+const cleanups = new WeakMap<HTMLElement, () => void>();
+
+/** 剩下的動畫立刻跑完（「略過」、Esc） */
+function skipScene(root: HTMLElement): void {
+  FAST = true;
+  root.classList.add('fast');
+  root.getAnimations({ subtree: true }).forEach((a) => {
+    if (a.effect && a.effect.getTiming().iterations === Infinity) return;
+    try {
+      a.finish();
+    } catch {
+      /* 有些動畫還沒開始 */
+    }
+  });
+}
+
+/** 全螢幕場景（寄信、拆信、丟垃圾桶），右下角有「略過」，也可以按 Esc */
 export function makeScene(): Scene {
   FAST = false;
   const root = el('div', 'scene'),
@@ -44,18 +61,12 @@ export function makeScene(): Scene {
     beam = el('div', 'beam');
   const sk = el('button', 'btn small skip', '略過');
   sk.type = 'button';
-  sk.onclick = () => {
-    FAST = true;
-    root.classList.add('fast');
-    root.getAnimations({ subtree: true }).forEach((a) => {
-      if (a.effect && a.effect.getTiming().iterations === Infinity) return;
-      try {
-        a.finish();
-      } catch {
-        /* 有些動畫還沒開始 */
-      }
-    });
+  sk.onclick = () => skipScene(root);
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') skipScene(root);
   };
+  document.addEventListener('keydown', onKey);
+  cleanups.set(root, () => document.removeEventListener('keydown', onKey));
   const say = el('div', 'say');
   root.append(beam);
   if (!RM)
@@ -67,6 +78,21 @@ export function makeScene(): Scene {
   root.append(cam, say, sk);
   document.body.append(root);
   return { sc: cam, say };
+}
+
+/**
+ * 換頁（元件卸載）時把還在播的場景收掉：畫面立刻拿掉、不留殘影，
+ * 還在 await 的場景程式會以「略過」的速度跑完（endScene 再把 FAST 還原）。資料早就送出了，不受影響。
+ */
+export function abortScenes(): void {
+  const roots = [...document.querySelectorAll<HTMLElement>('.scene')];
+  if (!roots.length) return;
+  roots.forEach((r) => {
+    skipScene(r);
+    cleanups.get(r)?.();
+    cleanups.delete(r);
+    r.remove();
+  });
 }
 
 /** 字一個一個像墨水暈開 */
@@ -101,7 +127,9 @@ export async function sayIt(say: HTMLElement, html: string): Promise<void> {
 
 export async function endScene(sc: HTMLElement): Promise<void> {
   const root = (sc.closest('.scene') as HTMLElement) || sc;
-  await anim(root, [{ opacity: 1 }, { opacity: 0.4, offset: 0.3 }, { opacity: 0.75, offset: 0.4 }, { opacity: 0 }], { d: 900, e: 'ease' });
+  if (root.isConnected) await anim(root, [{ opacity: 1 }, { opacity: 0.4, offset: 0.3 }, { opacity: 0.75, offset: 0.4 }, { opacity: 0 }], { d: 900, e: 'ease' });
+  cleanups.get(root)?.();
+  cleanups.delete(root);
   root.remove();
   FAST = false;
 }

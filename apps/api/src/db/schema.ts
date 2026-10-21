@@ -79,6 +79,8 @@ export const sheets = pgTable(
     mode: text('mode').notNull(),
     font: text('font').notNull(),
     bgAttachmentId: uuid('bg_attachment_id'),
+    /** 內建信紙圖樣範本（services/paperTemplates.ts 的 id）；和 bgAttachmentId 二選一 */
+    bgTemplate: text('bg_template'),
     createdAt: ts('created_at').notNull(),
     discardState: text('discard_state'),
     discardAngle: integer('discard_angle'),
@@ -96,9 +98,11 @@ export const sheetOps = pgTable(
       .references(() => sheets.id, { onDelete: 'cascade' }),
     seq: integer('seq').notNull(),
     op: jsonb('op').notNull(),
+    /** 客戶端產生的操作 id（重送時用來認出「已經寫過了」）；舊資料沒有 */
+    opId: uuid('op_id'),
     createdAt: ts('created_at').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.sheetId, t.seq] })],
+  (t) => [primaryKey({ columns: [t.sheetId, t.seq] }), uniqueIndex('sheet_ops_op_id_uq').on(t.sheetId, t.opId)],
 );
 
 /** purpose：attachment 附件／scan 紙本匯入／bg 信紙圖樣／front 明信片正面／stamp 郵票／postmark 郵戳／skin 信封圖 */
@@ -120,6 +124,28 @@ export const attachments = pgTable(
     takenOutAt: ts('taken_out_at'),
   },
   (t) => [index('attachments_letter_idx').on(t.letterId)],
+);
+
+/**
+ * 使用者上傳的字型（PRD 2.3、D-027）。屬於帳號、不屬於某封信；信紙與信封以 font = 'f:<id>' 指向這裡。
+ * 檔案和附件一樣放在 Storage，不提供刪除（寄出去的信還要用）。
+ */
+export const fonts = pgTable(
+  'fonts',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** ttf／otf／woff／woff2（依 magic bytes 判定） */
+    format: text('format').notNull(),
+    mime: text('mime').notNull(),
+    size: integer('size').notNull(),
+    path: text('path').notNull(),
+    createdAt: ts('created_at').notNull(),
+  },
+  (t) => [index('fonts_user_idx').on(t.userId)],
 );
 
 /** 前往郵局。arriveAt 由伺服器算，抵達與否只看伺服器時間 */
