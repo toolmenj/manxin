@@ -78,3 +78,11 @@
 .scene:has(.pb-stage){background:radial-gradient(ellipse 80% 70% at 50% 42%,rgba(40,28,12,.62),rgba(10,7,3,.95) 78%)}
 /* 「略過」在每個年代都要看得到（民國的 .btn 是透明底，疊在暗色場景上幾乎看不見） */
 .scene .btn.skip{background:rgba(255,250,236,.9);color:#2A2620;border-color:rgba(42,38,32,.6);z-index:5}
+/* 信紙範本縮圖：四張一排，選到的那張像抽出來一點；鎖住後仍看得出哪張是目前這張 */
+.tpl-grid{display:grid;grid-template-columns:repeat(4,44px);gap:8px 6px}
+.tpl{width:44px;height:62px;padding:0;border:1px solid var(--line);border-radius:2px;background:var(--paper) center / cover no-repeat;box-shadow:0 1px 0 rgba(0,0,0,.08);cursor:pointer;transition:transform .35s cubic-bezier(.4,0,.2,1),box-shadow .35s}
+.tpl:hover{transform:translateY(-2px);box-shadow:0 3px 6px rgba(0,0,0,.18)}
+.tpl[aria-pressed="true"]{border-color:var(--post);box-shadow:0 0 0 2px var(--post),2px 3px 0 rgba(0,0,0,.2);transform:rotate(-2deg)}
+.tpl:disabled{cursor:not-allowed;opacity:.5;transform:none;box-shadow:none}
+.tpl:disabled[aria-pressed="true"]{opacity:.9;box-shadow:0 0 0 2px var(--post)}
+:root[data-era="doodle"] .tpl,:root[data-era="map"] .tpl{border-width:2px}

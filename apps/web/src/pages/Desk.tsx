@@ -1020,32 +1020,21 @@ export function DeskPage() {
             {templates.length > 0 && (
               <div className="tgroup" id="tplBox" style={{ width: '100%' }}>
                 <span className="label">信紙範本</span>
-                <div role="group" aria-label="信紙範本" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <div role="group" aria-label="信紙範本" className="tpl-grid">
                   {templates.map((tp) => {
                     const on = sheet.style === 'custom' && sheet.bgTemplate === tp.id;
-                    const off = locked || !!trip;
                     return (
                       <button
                         key={tp.id}
                         type="button"
+                        className="tpl"
                         data-tpl={tp.id}
                         aria-pressed={on}
                         aria-label={tp.name}
                         title={`${tp.name}：${tp.note}`}
-                        disabled={off}
+                        disabled={locked || !!trip}
                         onClick={() => void patchSheet({ bgTemplate: tp.id })}
-                        style={{
-                          width: 44,
-                          height: 62,
-                          padding: 0,
-                          border: on ? '2px solid var(--ink)' : '1px solid rgba(0,0,0,.25)',
-                          background: `center / cover no-repeat url(${fileUrl(tp.url)})`,
-                          boxShadow: on ? '2px 3px 0 rgba(0,0,0,.25)' : 'none',
-                          transform: on ? 'rotate(-2deg)' : undefined,
-                          transition: 'transform .35s cubic-bezier(.4,0,.2,1)',
-                          cursor: off ? 'not-allowed' : 'pointer',
-                          opacity: off ? 0.55 : 1,
-                        }}
+                        style={{ backgroundImage: `url(${fileUrl(tp.url)})` }}
                       />
                     );
                   })}
