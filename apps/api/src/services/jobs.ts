@@ -18,11 +18,12 @@ import {
   type Plan,
 } from '@manxin/engine';
 import type { EnvAddress } from '@manxin/shared';
-import { and, asc, eq, lte } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, lt, lte, or } from 'drizzle-orm';
 import type { Ctx } from '../context.ts';
 import type { Db } from '../db/client.ts';
-import { letters, scheduledJobs, shipments, users } from '../db/schema.ts';
-import { hmacToken, sha256 } from '../lib/crypto.ts';
+import { emailOutbox, letters, loginTokens, rateLimits, scheduledJobs, sessions, shipments, users } from '../db/schema.ts';
+import { hmacToken, normEmail, sha256 } from '../lib/crypto.ts';
+import { isBlocked } from './abuse.ts';
 import { deliveryMail, remindMail, returnMail, unsentAskMail } from './mails.ts';
 import { editsOf, statusInput, type Pkg } from './shipments.ts';
 
@@ -74,8 +75,10 @@ const handlers: Record<JobKind, Handler> = {
     if (st.state === 'returned') return 'skipped:returned';
     const env = s.env as EnvAddress;
     const to = seq === 0 ? env.toEmail : edits[seq - 1]!.email;
+    // 收件人封鎖了寄件人：不送到（寄件人那邊照常，30 天後照一般規則退回）
+    if (await isBlocked(db, to, s.userId)) return 'skipped:blocked';
     const token = recipientToken(ctx.cfg.appSecret, s.id, seq);
-    await db.update(shipments).set({ recipientTokenHash: sha256(token), deliverySeq: seq }).where(eq(shipments.id, s.id));
+    await db.update(shipments).set({ recipientTokenHash: sha256(token), deliverySeq: seq, recipientEmail: normEmail(to) }).where(eq(shipments.id, s.id));
     const pkg = s.pkg as Pkg;
     const m = deliveryMail({
       fromName: env.fromName,
@@ -110,6 +113,8 @@ const handlers: Record<JobKind, Handler> = {
     const P = s.plan as Plan;
     const pm = returnPostmark(P.dest, st.ret);
     const env = s.env as EnvAddress;
+    // 寄件人刪除了帳號（信箱已拿掉）：照樣退回，只是不寄通知
+    if (!env.fromEmail) return 'done:returned-no-sender';
     const m = returnMail({ no: s.no, dest: P.dest, pm, trackLink: `${ctx.cfg.appUrl}/track/${s.no}` });
     const sent = await ctx.mailer.send(
       { to: env.fromEmail, ...m, idempotencyKey: job.uniqueKey, meta: { kind: 'return', no: s.no, postmark: pm } },
@@ -151,6 +156,7 @@ async function remind(ctx: Ctx, db: Db, job: JobRow, now: number, which: 24 | 48
   if (st.state === 'signed' || st.state === 'returned') return `skipped:${st.state}`;
   if (!(which === 24 ? st.rem1 : st.rem2)) return 'skipped:not-due';
   const env = s.env as EnvAddress;
+  if (!env.fromEmail) return 'skipped:no-sender';
   const m = remindMail({ which, no: s.no, toLabel: env.toName || st.curEmail, trackLink: `${ctx.cfg.appUrl}/track/${s.no}` });
   const sent = await ctx.mailer.send({ to: env.fromEmail, ...m, idempotencyKey: job.uniqueKey, meta: { kind: `remind${which}`, no: s.no } }, db, now);
   return sent ? 'sent' : 'skipped:already-sent';
@@ -196,6 +202,8 @@ export async function runDueJobs(ctx: Ctx, limit = 500): Promise<RunResult[]> {
       if (!job) throw e;
       const attempts = job.attempts + 1;
       ctx.log.error({ err: e, job: job.uniqueKey }, 'scheduled job failed');
+      // 交易已回滾、鎖已放掉，別的 worker 可能剛好認領並做完了。
+      // 只在「還是我們認領時的那個狀態」才記失敗，不覆寫別人的結果（review M3）
       await ctx.db
         .update(scheduledJobs)
         .set({
@@ -204,18 +212,60 @@ export async function runDueJobs(ctx: Ctx, limit = 500): Promise<RunResult[]> {
           status: attempts >= MAX_ATTEMPTS ? 'failed' : 'pending',
           runAt: new Date(now + Math.min(60, 2 ** attempts) * 60_000),
         })
-        .where(eq(scheduledJobs.id, job.id));
+        .where(and(eq(scheduledJobs.id, job.id), eq(scheduledJobs.status, 'pending'), eq(scheduledJobs.attempts, job.attempts)));
       out.push({ id: job.id, kind: job.kind, uniqueKey: job.uniqueKey, result: `error:${(e as Error)?.message}` });
     }
   }
+  // 交易都成功了，才把這一輪排入的信真的寄出（正式環境的 outbox；開發環境是空動作）
+  await flushMail(ctx);
   return out;
 }
 
+/** 把待寄的信寄出。寄信失敗不影響排程結果，下一輪會重試 */
+export async function flushMail(ctx: Ctx): Promise<void> {
+  try {
+    await ctx.mailer.flush(ctx.db, Date.now());
+  } catch (e) {
+    ctx.log.error({ err: e }, 'mail flush failed');
+  }
+}
+
+/**
+ * 清理過期資料（review 低：資料表無清理）：過期的登入連結、session、頻率限制計數，
+ * 以及 30 天前已寄出的信件紀錄（內文寄出時就清掉了，這裡刪整列）。
+ */
+export async function housekeeping(ctx: Ctx): Promise<void> {
+  const now = Date.now();
+  await ctx.db.delete(loginTokens).where(or(lt(loginTokens.expiresAt, new Date(now - 86400_000)), isNotNull(loginTokens.usedAt)));
+  await ctx.db.delete(sessions).where(lt(sessions.expiresAt, new Date(now)));
+  await ctx.db.delete(rateLimits).where(lt(rateLimits.windowStart, new Date(now - 86400_000)));
+  await ctx.db.delete(emailOutbox).where(and(eq(emailOutbox.status, 'sent'), lt(emailOutbox.sentAt, new Date(now - 30 * 86400_000))));
+  // 做完或略過超過 90 天的排程紀錄
+  await ctx.db
+    .delete(scheduledJobs)
+    .where(and(or(eq(scheduledJobs.status, 'done'), eq(scheduledJobs.status, 'skipped')), lt(scheduledJobs.doneAt, new Date(now - 90 * 86400_000))));
+}
+
+export interface Worker {
+  /** 停止輪詢，並等手上這一輪跑完（Kubernetes 關 Pod 時不要做到一半） */
+  stop(): Promise<void>;
+  kick(): Promise<RunResult[]>;
+}
+
+const HOUSEKEEPING_EVERY_MS = 3600_000;
+
 /** 每 interval 毫秒輪詢一次 */
-export function startWorker(ctx: Ctx, intervalMs: number): { stop(): void; kick(): Promise<RunResult[]> } {
+export function startWorker(ctx: Ctx, intervalMs: number): Worker {
   let running: Promise<RunResult[]> | null = null;
+  let stopped = false;
+  let lastHousekeeping = 0;
   const kick = () => {
+    if (stopped) return Promise.resolve([] as RunResult[]);
     if (!running) {
+      if (Date.now() - lastHousekeeping > HOUSEKEEPING_EVERY_MS) {
+        lastHousekeeping = Date.now();
+        void housekeeping(ctx).catch((e) => ctx.log.error({ err: e }, 'housekeeping failed'));
+      }
       running = runDueJobs(ctx)
         .catch((e) => {
           ctx.log.error({ err: e }, 'worker tick failed');
@@ -230,5 +280,12 @@ export function startWorker(ctx: Ctx, intervalMs: number): { stop(): void; kick(
   const timer = setInterval(() => void kick(), intervalMs);
   timer.unref?.();
   void kick();
-  return { stop: () => clearInterval(timer), kick };
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (running) await running;
+    },
+    kick,
+  };
 }

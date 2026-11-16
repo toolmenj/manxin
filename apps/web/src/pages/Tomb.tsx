@@ -66,14 +66,13 @@ export function TombPage() {
           {data.unsent.map((u) => {
             const at = u.shelvedAt ?? u.createdAt;
             const d = Math.floor((now - at) / D);
-            const since = Math.floor((now - (u.askedAt ?? at)) / D);
             const vs = viewSheet(u.sheet, attachmentUrl);
             return (
               <div key={u.id} className="uenv">
                 <span className="to">給 {u.env.toName || '（還沒寫收件人）'}</span>
                 <span className="ex">{textOf(u.sheet).replace(/\n+/g, ' ').slice(0, 60) || '（手寫或紙本）'}</span>
                 <span className="m">
-                  {fmt(at, { time: false })} 放進來・{d} 天{u.askDue ? '・該問問你了' : `・${Math.max(1, 30 - since)} 天後再問`}
+                  {fmt(at, { time: false })} 放進來・{d} 天{u.askDue ? '・該問問你了' : `・${Math.max(1, Math.ceil(((u.askAt ?? now) - now) / D))} 天後再問`}
                 </span>
                 <span className="row">
                   <button

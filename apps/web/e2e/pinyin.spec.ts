@@ -13,6 +13,8 @@ async function login(page: Page, email: string) {
   const r = await (await page.request.get(`${API}/dev/outbox?to=${encodeURIComponent(email)}`)).json();
   const token = r.mails.find((m: { meta: { kind: string } }) => m.meta.kind === 'login').meta.token;
   await page.goto('/login?token=' + token);
+  // D-030：登入連結要按一下才登入（郵件掃描器打開連結不會把它用掉）
+  await page.getByRole('button', { name: '登入慢信' }).click();
   await page.waitForURL('**/desk');
 }
 
@@ -37,12 +39,11 @@ test('拼音鍵盤打出簡體字', async ({ page }) => {
   await expect(page.locator('[data-tw="pybuf"]')).toHaveText('n');
   await expect(chars).toHaveCount(before);
 
-  // nihao：空白選「你」，剩下的 hao 再按空白
+  // nihao：詞組排在前面，空白選「你好」，整串拼音一次吃掉
   await page.keyboard.type('ihao');
-  await expect(page.locator('[data-tw="pycands"] i').first()).toHaveText('你');
+  await expect(page.locator('[data-tw="pycands"] i').first()).toHaveText('你好');
   await page.keyboard.press('Space');
-  await expect(page.locator('[data-tw="pybuf"]')).toHaveText('hao');
-  await page.keyboard.press('Space');
+  await expect(chars).toHaveCount(before + 2);
   // 數字選字、標點變全形
   await page.keyboard.type('zhong1guo1,');
   await expect(chars).toHaveCount(before + 5);

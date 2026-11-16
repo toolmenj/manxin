@@ -3,6 +3,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  applyOp,
   applyOps,
   hash,
   placeById,
@@ -14,12 +15,16 @@ import {
   type SheetOp,
   type SheetContent,
 } from '@manxin/engine';
-import type { AttachmentDTO, DiscardState, EnvAddress, LetterDTO, SheetDTO, TombDTO, TripDTO } from '@manxin/shared';
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import type { SheetDeltaDTO, AttachmentDTO, DiscardState, EnvAddress, LetterDTO, SheetDTO, TombDTO, TripDTO } from '@manxin/shared';
+import { and, asc, desc, eq, gte, inArray, isNull } from 'drizzle-orm';
 import { ms, type Ctx } from '../context.ts';
 import type { Db } from '../db/client.ts';
 import { attachments, letters, sheetOps, sheets, trips } from '../db/schema.ts';
 import { fail, notFound } from '../lib/errors.ts';
+import { sniffImage } from './storage.ts';
+import { lockUser } from './abuse.ts';
+import { assertAttachmentSlots, assertStorageQuota } from './quota.ts';
+import { LIST_CONCURRENCY, mapLimit } from '../lib/async.ts';
 import { resetAddrOk } from './counter.ts';
 import { assertFontUsable, customFontId, fontUrl } from './fonts.ts';
 import { enqueue } from './jobs.ts';
@@ -41,9 +46,27 @@ export async function getLetter(db: Db, userId: string, letterId: string, lock =
 }
 
 /** 重放信紙內容。格位排版要知道紙種與樣式（可寫區域），所以傳整列 sheet 進來 */
-export async function sheetContent(db: Db, sh: Pick<SheetRow, 'id' | 'kind' | 'style'>): Promise<{ content: SheetContent; seq: number }> {
-  const ops = await db.select().from(sheetOps).where(eq(sheetOps.sheetId, sh.id)).orderBy(asc(sheetOps.seq));
-  return { content: applyOps(ops.map((o) => o.op as SheetOp), paperOf(sh)), seq: ops.length };
+/** 快照之後累積超過這麼多筆，就更新快照（review M5） */
+export const SNAPSHOT_EVERY = 50;
+
+/**
+ * 信紙內容。有快照就只重放快照之後的操作（逐筆 applyOp ＝ 整張 applyOps，見 engine 的 sheet-delta 測試）。
+ * 沒有快照（舊資料、換過紙）就從頭重放。
+ */
+export async function sheetContent(
+  db: Db,
+  sh: Pick<SheetRow, 'id' | 'kind' | 'style'> & Partial<Pick<SheetRow, 'snapshot' | 'snapshotSeq'>>,
+): Promise<{ content: SheetContent; seq: number }> {
+  const paper = paperOf(sh);
+  const snap = sh.snapshot && sh.snapshotSeq ? (sh.snapshot as SheetContent) : null;
+  const from = snap ? sh.snapshotSeq! : 0;
+  const ops = await db
+    .select({ op: sheetOps.op })
+    .from(sheetOps)
+    .where(snap ? and(eq(sheetOps.sheetId, sh.id), gte(sheetOps.seq, from)) : eq(sheetOps.sheetId, sh.id))
+    .orderBy(asc(sheetOps.seq));
+  const content = snap ? ops.reduce((c, o) => applyOp(c, o.op as SheetOp, paper), snap) : applyOps(ops.map((o) => o.op as SheetOp), paper);
+  return { content, seq: from + ops.length };
 }
 
 export const paperOf = (sh: Pick<SheetRow, 'kind' | 'style'>): PaperRef => ({ kind: sh.kind as PaperRef['kind'], style: sh.style as PaperRef['style'] });
@@ -122,24 +145,24 @@ export function tripDTO(t: TripRow, now: number): TripDTO {
 
 export async function letterDTO(ctx: Ctx, L: LetterRow, db: Db = ctx.db): Promise<LetterDTO> {
   const now = ctx.clock.now();
-  const [cur, refs, atts, trip] = await Promise.all([
-    currentSheet(db, L.id),
-    refSheets(db, L.id),
-    letterAttachments(db, L.id),
-    activeTrip(db, L.id),
-  ]);
+  // 依序查：db 可能是交易（同一條連線），不能同時送多個查詢（review M4）
+  const cur = await currentSheet(db, L.id);
+  const refs = await refSheets(db, L.id);
+  const atts = await letterAttachments(db, L.id);
+  const trip = await activeTrip(db, L.id);
   return {
     id: L.id,
     status: L.status as LetterDTO['status'],
     env: { ...EMPTY_ENV, ...(L.env as Partial<EnvAddress>) },
     sheet: await sheetDTO(db, cur),
-    refs: await Promise.all(refs.map((r) => sheetDTO(db, r))),
+    refs: await mapLimit(refs, 1, (r) => sheetDTO(db, r)),
     attachments: atts.map((a) => attachmentDTO(a)),
     frontAttachmentId: L.frontAttachmentId,
     createdAt: L.createdAt.getTime(),
     shelvedAt: ms(L.shelvedAt),
     askedAt: ms(L.askedAt),
     askDue: L.status === 'shelved' && L.shelvedAt ? unsentAskDue(L.shelvedAt.getTime(), ms(L.askedAt), now) : false,
+    askAt: L.status === 'shelved' && L.shelvedAt ? nextUnsentAsk(L.shelvedAt.getTime(), ms(L.askedAt)) : null,
     trip: trip ? tripDTO(trip, now) : null,
   };
 }
@@ -210,7 +233,7 @@ export async function createLetter(ctx: Ctx, user: { id: string; email: string }
 export async function listLetters(ctx: Ctx, userId: string, status?: string): Promise<LetterDTO[]> {
   const where = status ? and(eq(letters.userId, userId), eq(letters.status, status)) : eq(letters.userId, userId);
   const rows = await ctx.db.select().from(letters).where(where).orderBy(desc(letters.createdAt));
-  return Promise.all(rows.map((L) => letterDTO(ctx, L)));
+  return mapLimit(rows, LIST_CONCURRENCY, (L) => letterDTO(ctx, L));
 }
 
 /** 地址與明信片正面圖。改了任一個信箱，櫃台的「地址確認」要重來 */
@@ -295,6 +318,8 @@ export async function patchSheet(
     if (kind === 'postcard' && (patch.style ?? sh.style) !== 'custom' && ['grid', 'bahang'].includes(patch.style ?? sh.style)) {
       patch.style = 'lined';
     }
+    // 換了紙種或樣式，舊快照是照舊的紙算的，要丟掉重算
+    if (patch.kind !== undefined || patch.style !== undefined) Object.assign(patch, { snapshot: null, snapshotSeq: 0 });
     if (Object.keys(patch).length) await tx.update(sheets).set(patch).where(eq(sheets.id, sh.id));
     return sheetDTO(tx, { ...sh, ...patch });
   });
@@ -314,6 +339,8 @@ export interface AppendOpts {
   seq?: number;
   sheetId?: string;
   opId?: string;
+  /** 只回這一筆操作，不回整張信紙（review M5） */
+  delta?: boolean;
 }
 
 /**
@@ -330,7 +357,7 @@ export async function appendToSheet(
   letterId: string,
   input: AppendInput,
   optsIn?: number | AppendOpts,
-): Promise<SheetDTO & { replayed?: boolean }> {
+): Promise<(SheetDTO & { replayed?: boolean }) | SheetDeltaDTO> {
   const opts: AppendOpts = typeof optsIn === 'number' ? { seq: optsIn } : (optsIn ?? {});
   return ctx.db.transaction(async (tx) => {
     const L = await getLetter(tx, userId, letterId, true);
@@ -367,6 +394,13 @@ export async function appendToSheet(
     const err = checkOp(content, sh.mode as 'type' | 'hand', op, paperOf(sh));
     if (err) fail(422, 'INVALID_OP', opErrorMessage(err), { reason: err });
     await tx.insert(sheetOps).values({ sheetId: sh.id, seq, op, opId: opts.opId?.toLowerCase() ?? null, createdAt: ctx.clock.date() });
+    if (seq + 1 - (sh.snapshot ? sh.snapshotSeq : 0) >= SNAPSHOT_EVERY) {
+      await tx
+        .update(sheets)
+        .set({ snapshot: applyOp(content, op, paperOf(sh)), snapshotSeq: seq + 1 })
+        .where(eq(sheets.id, sh.id));
+    }
+    if (opts.delta) return { delta: true as const, id: sh.id, seq: seq + 1, op };
     return sheetDTO(tx, sh);
   });
 }
@@ -453,15 +487,13 @@ export async function tomb(ctx: Ctx, userId: string): Promise<TombDTO> {
     .where(and(eq(sheets.userId, userId), eq(sheets.role, 'tomb')))
     .orderBy(desc(sheets.discardedAt));
   return {
-    sheets: await Promise.all(
-      rows.map(async (s) => ({
+    sheets: await mapLimit(rows, LIST_CONCURRENCY, async (s) => ({
         sheet: await sheetDTO(ctx.db, s),
         state: s.discardState as DiscardState,
         angle: s.discardAngle ?? 0,
         discardedAt: ms(s.discardedAt) ?? 0,
         letterId: s.letterId,
       })),
-    ),
     unsent: await listLetters(ctx, userId, 'shelved'),
   };
 }
@@ -529,13 +561,18 @@ export async function addAttachment(
   file: { name: string; mime: string; data: Buffer },
 ): Promise<AttachmentDTO> {
   return ctx.db.transaction(async (tx) => {
+    // 鎖住使用者：同時上傳也不會超過配額（review M13）
+    await lockUser(tx, userId);
     const L = await getLetter(tx, userId, letterId, true);
     if (L.status === 'sent') fail(409, 'LETTER_LOCKED', '信已經寄出');
+    await assertAttachmentSlots(tx, L.id);
+    await assertStorageQuota(tx, userId, file.data.length);
     // 附件、紙本、信紙圖樣、明信片正面在書桌上處理；郵票、郵戳、信封圖在郵局處理
     if (['attachment', 'scan', 'bg', 'front'].includes(purpose)) await assertWritable(tx, L);
-    if (!/^image\//.test(file.mime)) fail(422, 'INVALID_OP', '只接受圖片檔');
+    // 依檔頭判斷，不相信瀏覽器給的 content-type；不收 SVG（review H3）
+    const mime = sniffImage(file.data) ?? fail(422, 'INVALID_OP', '只接受 PNG、JPEG、WebP、GIF 圖片');
     const id = randomUUID();
-    const stored = await ctx.storage.put(`${id}`, file.data);
+    const stored = await ctx.storage.put(`${id}`, file.data, tx, ctx.clock.now());
     const [a] = await tx
       .insert(attachments)
       .values({
@@ -544,7 +581,7 @@ export async function addAttachment(
         letterId: L.id,
         purpose,
         name: file.name.slice(0, 200),
-        mime: file.mime,
+        mime,
         size: file.data.length,
         path: stored,
         createdAt: ctx.clock.date(),

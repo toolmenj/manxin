@@ -2,6 +2,10 @@
  * 拼音鍵盤（簡體）：打羅馬拼音、選候選字，寫到紙上的是簡體字。
  * 字典是 4,500 個常用簡體字，候選依字頻排（資料：Jun Da 現代漢語字頻表，經 hanzi 套件取得；產生方式見 docs）。
  * 組字中的拼音還沒寫到紙上，所以可以退格；選定的字一送出就落子無悔。
+ *
+ * 詞組（backlog「拼音鍵盤加詞組」）：連打好幾個音節時（nihao、xihuan），先列出常用詞，再列單字。
+ * 詞庫 pinyin-phrases.json（約 3 萬個詞，結巴詞典＋pinyin-pro 標音，產生方式見 scripts/gen-pinyin-phrases.mjs）
+ * 有 500 多 KB，切到拼音鍵盤才載入；還沒載入時照樣只有單字。
  */
 import DATA from './pinyin-data.json';
 
@@ -43,6 +47,55 @@ export const PY_PUNCT: Record<string, string> = {
  * - 連打好幾個音節（nihao）：取最長的合法開頭（ni），剩下的留著
  * - 撇號 ' 可以手動分音節（xi'an）
  */
+let PHRASES: Record<string, string> | null = null;
+let loading: Promise<void> | null = null;
+
+/** 載入詞組（第一次用拼音鍵盤時） */
+export function loadPhrases(): Promise<void> {
+  loading ??= import('./pinyin-phrases.json').then((m) => {
+    PHRASES = m.default as Record<string, string>;
+  });
+  return loading;
+}
+/** 測試用 */
+export function setPhrases(d: Record<string, string> | null): void {
+  PHRASES = d;
+}
+
+const MAX_PHRASES = 8;
+
+/**
+ * 詞組候選：從組字串開頭取最長的、詞庫裡有的拼音（至少兩個字母），由長到短列出。
+ * 撇號不影響比對（xi'an 也找得到「西安」），但吃掉的長度要算進撇號。
+ */
+function phraseCands(buf: string): { text: string; take: number }[] {
+  if (!PHRASES) return [];
+  const letters = buf.replace(/'/g, '');
+  const out: { text: string; take: number }[] = [];
+  const seen = new Set<string>();
+  for (let end = letters.length; end >= 2 && out.length < MAX_PHRASES; end--) {
+    const hit = PHRASES[letters.slice(0, end)];
+    if (!hit) continue;
+    // 原始字串（含撇號）裡，吃掉 end 個字母要吃到哪裡
+    let take = 0;
+    for (let n = 0; take < buf.length && n < end; take++) if (buf[take] !== "'") n++;
+    for (const w of hit.split(' ')) {
+      if (!seen.has(w) && out.length < MAX_PHRASES) {
+        seen.add(w);
+        out.push({ text: w, take });
+      }
+    }
+  }
+  return out;
+}
+
+/** 候選字與詞：每個候選各自記得選了之後吃掉幾個字母（詞組吃得比單字多） */
+export function candidateList(buf: string): { text: string; take: number }[] {
+  const single = candidates(buf);
+  const phrases = phraseCands(buf).filter((p) => p.take > single.take || [...p.text].length > 1);
+  return [...phrases, ...single.chars.map((c) => ({ text: c, take: single.take }))];
+}
+
 export function candidates(buf: string): { chars: string[]; take: number } {
   const ap = buf.indexOf("'");
   const seg = ap >= 0 ? buf.slice(0, ap) : buf;
@@ -82,15 +135,20 @@ export class PinyinComposer {
     private readonly onChange: (s: PinyinState) => void = () => {},
   ) {}
 
+  /** 詞組載入之後（書桌切到拼音鍵盤時呼叫 loadPhrases），讓畫面上的候選更新一次 */
+  refresh(): void {
+    if (this.buf) this.emit();
+  }
+
   get active(): boolean {
     return this.buf.length > 0;
   }
 
   state(): PinyinState {
-    const { chars } = candidates(this.buf);
-    const pages = Math.max(1, Math.ceil(chars.length / PAGE));
+    const list = candidateList(this.buf);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
     const page = Math.min(this.page, pages - 1);
-    return { buf: this.buf, cands: chars.slice(page * PAGE, page * PAGE + PAGE), page, pages };
+    return { buf: this.buf, cands: list.slice(page * PAGE, page * PAGE + PAGE).map((c) => c.text), page, pages };
   }
 
   private emit(): void {
@@ -135,12 +193,13 @@ export class PinyinComposer {
 
   /** 選這一頁第 i 個候選字 */
   pick(i: number): void {
-    const c = this.state().cands[i];
+    const list = candidateList(this.buf);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
+    const c = list[Math.min(this.page, pages - 1) * PAGE + i];
     if (!c) return;
-    const { take } = candidates(this.buf);
-    this.buf = this.buf.slice(take).replace(/^'+/, '');
+    this.buf = this.buf.slice(c.take).replace(/^'+/, '');
     this.page = 0;
-    this.out(c);
+    this.out(c.text);
     this.emit();
   }
 

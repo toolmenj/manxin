@@ -79,9 +79,9 @@ function Trip({ L, places, onLetter }: { L: LetterDTO; places: PlacesDTO; onLett
   useEffect(() => {
     if (!T) return;
     let raf = 0;
+    // 每一幀只移動地圖上的小人（直接改 DOM），倒數數字每秒更新一次就好（review 低：以前每一幀 setState）
     const f = () => {
       const t = app.now();
-      setNow(t);
       const g = Math.min(1, Math.max(0, (t - T.startAt) / (T.arriveAt - T.startAt)));
       if (mapRef.current) placeWalker(mapRef.current, g);
       if (g < 1) raf = requestAnimationFrame(f);

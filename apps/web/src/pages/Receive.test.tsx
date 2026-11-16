@@ -50,10 +50,13 @@ function dto(o: Partial<ReceiveDTO['recv']> = {}, extra: Partial<ReceiveDTO> = {
 }
 
 describe('收信', () => {
-  it('點開連結就送 enter；看到「阿哲寄來的信」與翻面按鈕', async () => {
+  it('打開連結不會自己簽收（D-030）：按「收下這封信」才送 enter；之後看得到翻面按鈕', async () => {
     const api = fakeApi({ ...BASE_ROUTES, 'GET /r/:t': dto(), 'POST /r/:t/enter': dto({ entered: true }) });
     renderPage(<ReceivePage />, '/r/' + TOKEN, '/r/:token', null);
     expect(await screen.findByText('阿哲寄來的信')).toBeInTheDocument();
+    expect(api.calls.map((c) => `${c.method} ${c.path}`)).not.toContain(`POST /r/${TOKEN}/enter`);
+    fireEvent.click(screen.getByRole('button', { name: '收下這封信' }));
+    await screen.findByRole('button', { name: '翻到背面' });
     expect(api.calls.map((c) => `${c.method} ${c.path}`)).toContain(`POST /r/${TOKEN}/enter`);
     fireEvent.click(screen.getByRole('button', { name: '翻到背面' }));
     expect(await screen.findByRole('button', { name: '拉易撕帶' })).toBeInTheDocument();
@@ -114,7 +117,8 @@ describe('收信的開場與收尾', () => {
     const spy = vi.spyOn(Element.prototype, 'animate');
     fakeApi({ ...BASE_ROUTES, 'GET /r/:t': dto(), 'POST /r/:t/enter': dto({ entered: true }) });
     renderPage(<ReceivePage />, '/r/' + TOKEN, '/r/:token', null);
-    await screen.findByText('阿哲寄來的信');
+    fireEvent.click(await screen.findByRole('button', { name: '收下這封信' }));
+    await screen.findByRole('button', { name: '翻到背面' });
     await waitFor(() => expect(hostAnims(spy).length).toBe(1));
     expect(hostAnims(spy)[0]![0]!.opacity).toBe(0);
     fireEvent.click(screen.getByRole('button', { name: '翻到背面' }));

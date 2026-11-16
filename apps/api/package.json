@@ -5,28 +5,33 @@
   "type": "module",
   "description": "慢信 API（Fastify + PostgreSQL）",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/server.ts",
-    "start": "tsx --env-file-if-exists=../../.env src/server.ts",
-    "worker": "tsx --env-file-if-exists=../../.env src/worker-main.ts",
+    "dev": "cross-env NODE_ENV=development tsx watch --env-file-if-exists=../../.env src/server.ts",
+    "start": "cross-env NODE_ENV=development tsx --env-file-if-exists=../../.env src/server.ts",
+    "worker": "cross-env NODE_ENV=development tsx --env-file-if-exists=../../.env src/worker-main.ts",
     "test": "vitest run",
     "typecheck": "tsc -p .",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file-if-exists=../../.env src/db/migrate-cli.ts",
-    "db:seed": "tsx --env-file-if-exists=../../.env src/db/seed.ts"
+    "db:migrate": "cross-env NODE_ENV=development tsx --env-file-if-exists=../../.env src/db/migrate-cli.ts",
+    "db:seed": "cross-env NODE_ENV=development tsx --env-file-if-exists=../../.env src/db/seed.ts",
+    "build": "node build.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.9",
     "@fastify/cookie": "^11.1.3",
     "@fastify/multipart": "^10.1.3",
+    "@fastify/static": "^10.1.10",
     "@manxin/engine": "0.1.0",
     "@manxin/shared": "0.1.0",
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.7",
+    "nodemailer": "^10.5.0",
     "pg": "^8.23.1",
     "pino": "^10.0.0"
   },
   "devDependencies": {
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
-    "drizzle-kit": "^0.31.11"
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2"
   }
 }

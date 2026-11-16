@@ -42,7 +42,8 @@ describe('書桌', () => {
     setup('小雯：');
     await waitFor(() => expect(document.querySelectorAll('#pw .type-layer .c')).toHaveLength(3));
     expect(screen.getByText(/落子無悔：沒有復原、沒有刪除、沒有橡皮擦/)).toBeInTheDocument();
-    expect(document.querySelector('#tw .tw-keys')).not.toBeNull();
+    // 打字機的鍵盤是畫面出來之後才掛上的
+    await waitFor(() => expect(document.querySelector('#tw .tw-keys')).not.toBeNull());
     expect(screen.getByRole('button', { name: '謄打' })).toBeInTheDocument();
   });
 
@@ -65,6 +66,8 @@ describe('書桌', () => {
     await waitFor(() => expect(document.querySelectorAll('#pw .type-layer .c')).toHaveLength(7));
     const ime = document.querySelector<HTMLTextAreaElement>('#ime')!;
     const n0 = api.calls.length;
+    // 按鍵處理比畫面晚一點接上：第一下退格等到被擋下為止（沒接住的退格本來就什麼都不會發生）
+    await waitFor(() => expect(fireEvent.keyDown(ime, { key: 'Backspace' })).toBe(false));
     for (const k of [{ key: 'Backspace' }, { key: 'Delete' }, { key: 'z', ctrlKey: true }, { key: 'v', ctrlKey: true }]) {
       expect(fireEvent.keyDown(ime, k)).toBe(false); // preventDefault
     }
@@ -110,7 +113,9 @@ describe('書桌', () => {
     await waitFor(() => expect(document.querySelectorAll('#pw .type-layer .c')).toHaveLength(3));
     const ime = document.querySelector<HTMLTextAreaElement>('#ime')!;
     // 順排的信紙：打字頭在「小雯：」後面（第 0 行第 6 個半格）；往下兩行、往右一格
-    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowRight']) expect(fireEvent.keyDown(ime, { key })).toBe(false);
+    // 字畫出來之後，按鍵處理要再晚一點才接上（機器忙時看得出來）：第一下等到被接住為止，沒接住的按鍵什麼都不會發生
+    await waitFor(() => expect(fireEvent.keyDown(ime, { key: 'ArrowDown' })).toBe(false));
+    for (const key of ['ArrowDown', 'ArrowRight']) expect(fireEvent.keyDown(ime, { key })).toBe(false);
     await waitFor(() => expect(get().sheet.cursor).toEqual([2, 8]));
     const moves = api.calls.filter((c) => c.path.endsWith('/sheet/moves'));
     expect(moves.length).toBeGreaterThanOrEqual(1);

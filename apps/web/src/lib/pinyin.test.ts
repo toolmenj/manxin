@@ -103,3 +103,26 @@ describe('拼音組字器', () => {
     expect(text()).toBe('你');
   });
 });
+
+describe('詞組', () => {
+  it('連打好幾個音節：先列常用詞，再列單字；選詞一次吃掉整串', async () => {
+    const { candidateList, loadPhrases, PinyinComposer, setPhrases } = await import('./pinyin.ts');
+    await loadPhrases();
+    expect(candidateList('nihao')[0]).toEqual({ text: '你好', take: 5 });
+    expect(candidateList('xihuan').map((c) => c.text)).toContain('喜欢');
+    // 撇號照算：xi'an → 西安，吃掉 5 個字（含撇號）
+    expect(candidateList("xi'an").find((c) => c.text === '西安')?.take).toBe(5);
+    const out: string[] = [];
+    const py = new PinyinComposer((t) => out.push(t));
+    py.feed('nihao ');
+    expect(out).toEqual(['你好']);
+    expect(py.buf).toBe('');
+    // 選單字只吃掉那個音節，剩下的繼續組
+    py.feed('nihao');
+    const i = py.state().cands.indexOf('你');
+    py.pick(i);
+    expect(out.at(-1)).toBe('你');
+    expect(py.buf).toBe('hao');
+    setPhrases(null);
+  });
+});

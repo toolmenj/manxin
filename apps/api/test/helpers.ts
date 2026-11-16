@@ -1,5 +1,4 @@
 import { taipei } from '@manxin/engine';
-import { sql } from 'drizzle-orm';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,21 +24,34 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-const TABLES = [
-  'dev_outbox', 'scheduled_jobs', 'collection_items', 'email_edits', 'shipments', 'envelope_ops', 'counters', 'trips',
-  'fonts', 'attachments', 'sheet_ops', 'sheets', 'letters', 'sessions', 'login_tokens', 'users',
-];
+/** 在同一台 PostgreSQL 上建一個暫時資料庫（名字隨機），回傳連線網址與刪除方法 */
+async function createTempDb(url: string): Promise<{ url: string; drop(): Promise<void> }> {
+  const pg = (await import('pg')).default;
+  const name = `manxin_t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const admin = new pg.Client({ connectionString: url });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${name}`);
+  await admin.end();
+  const u = new URL(url);
+  u.pathname = '/' + name;
+  return {
+    url: u.toString(),
+    async drop() {
+      const c = new pg.Client({ connectionString: url });
+      await c.connect();
+      await c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await c.end();
+    },
+  };
+}
 
 export async function makeApp(startIso = '2026-10-14T10:00', over: Partial<Config> = {}): Promise<TestApp> {
   const url = process.env.TEST_DATABASE_URL;
-  const h = url ? await connectPg(url) : await connectPglite();
+  // 真的 PostgreSQL：每個測試 App 建自己的暫時資料庫，用完刪掉。
+  // 以前是共用一個資料庫、開頭清表，同一個檔案裡再建第二個 App 就會把第一個 App 的資料（含登入）清光。
+  const tmp = url ? await createTempDb(url) : null;
+  const h = tmp ? await connectPg(tmp.url) : await connectPglite();
   await h.migrate();
-  // 落子無悔的觸發器擋 TRUNCATE；測試清表要在同一個交易裡明說
-  if (url)
-    await h.db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT set_config('manxin.allow_truncate', 'on', true)`);
-      await tx.execute(sql.raw(`TRUNCATE ${TABLES.join(', ')} RESTART IDENTITY CASCADE`));
-    });
   let base = taipei(startIso);
   const clock = new Clock(true, 0, () => base);
   const cfg = loadConfig({ NODE_ENV: 'test', APP_SECRET: 'test-secret' } as NodeJS.ProcessEnv, {
@@ -63,7 +75,8 @@ export async function makeApp(startIso = '2026-10-14T10:00', over: Partial<Confi
       return app.inject({
         method: method as never,
         url,
-        headers: cookie ? { cookie } : {},
+        // 收信動作會綁定第一次動手的瀏覽器（D-029）；測試預設都是同一台瀏覽器
+        headers: { cookie: [cookie, 'mx_rb=test-browser-0000000000000000'].filter(Boolean).join('; ') },
         ...(body !== undefined ? { payload: body as object } : {}),
       });
     },
@@ -84,6 +97,7 @@ export async function makeApp(startIso = '2026-10-14T10:00', over: Partial<Confi
     async close() {
       await app.close();
       await h.close();
+      await tmp?.drop();
     },
   };
   return t;

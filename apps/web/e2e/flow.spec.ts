@@ -15,6 +15,8 @@ async function login(page: Page, email: string) {
   const r = await (await page.request.get(`${API}/dev/outbox?to=${encodeURIComponent(email)}`)).json();
   const token = r.mails.find((m: { meta: { kind: string } }) => m.meta.kind === 'login').meta.token;
   await page.goto('/login?token=' + token);
+  // D-030：登入連結要按一下才登入（郵件掃描器打開連結不會把它用掉）
+  await page.getByRole('button', { name: '登入慢信' }).click();
   await page.waitForURL('**/desk');
 }
 
@@ -41,6 +43,10 @@ test.afterAll(async ({ request }) => {
   await request.post(`${API}/dev/clock`, { data: { reset: true } });
 });
 
+// 同一個流程跑兩次：一般，以及系統設定「減少動態效果」（動畫全部跳過，流程與資料要一樣）
+for (const reduced of [false, true]) {
+test.describe(reduced ? '減少動態效果' : '一般', () => {
+test.use({ reducedMotion: reduced ? 'reduce' : 'no-preference' });
 test('寫信 → 郵局 → 寄出 → 快轉 → 收信開信', async ({ page }) => {
   page.on('pageerror', (e) => console.log('pageerror', e.message));
   page.on('response', async (r) => { if (r.status() >= 400 && r.url().includes('/api/') && !r.url().endsWith('/me')) console.log('HTTP', r.status(), r.url(), await r.text().catch(() => '')); });
@@ -124,12 +130,14 @@ test('寫信 → 郵局 → 寄出 → 快轉 → 收信開信', async ({ page }
 
   // 投郵筒：把信封拖進投遞口
   await page.evaluate(() => scrollTo(0, 0));
-  const slit = (await page.locator('#ctBox .slit').boundingBox())!;
+  // 真人常抓著信封邊緣、把手指放到郵筒身上（不一定對準投信口）：這樣也要投得進去
+  const box = (await page.locator('#ctBox .pbx').boundingBox())!;
   const ev = (await page.locator('#ctEnv').boundingBox())!;
-  await drag(page, { x: ev.x + ev.width / 2, y: ev.y + ev.height / 2 }, { x: slit.x + slit.width / 2, y: slit.y + slit.height / 2 }, 20);
+  await drag(page, { x: ev.x + 24, y: ev.y + ev.height / 2 }, { x: box.x + box.width / 2, y: box.y + box.height * 0.7 }, 20);
   // 信滑進投信口、郵筒晃一下之後，是「郵差來收信 → 單號」的過場；按「略過」讓測試不用等
   await expect(page.locator('#ctBox .pbx')).toBeVisible();
-  await page.locator('.scene .skip').click({ timeout: 15_000 });
+  // 減少動態效果時過場一下就結束，可能來不及按「略過」
+  if (!reduced) await page.locator('.scene .skip').click({ timeout: 15_000 });
   await expect(page.locator('.scene')).toHaveCount(0, { timeout: 10_000 });
   await page.waitForURL(/\/track\/RR\d{9}TW/, { timeout: 30_000 });
   const no = page.url().split('/').pop()!;
@@ -149,6 +157,8 @@ test('寫信 → 郵局 → 寄出 → 快轉 → 收信開信', async ({ page }
   await page.getByRole('button', { name: '到收件人的信箱看看' }).click();
   await page.waitForURL(/\/r\//);
   await expect(page.locator('.rv-head')).toContainText('阿哲寄來的信');
+  // D-030：打開連結不算簽收，要按「收下」
+  await page.getByRole('button', { name: '收下這封信' }).click();
   await page.getByRole('button', { name: '翻到背面' }).click();
   await expect(page.locator('#rvEnv .envb')).toBeVisible();
   const back = (await page.locator('#rvEnv .envb').boundingBox())!;
@@ -167,3 +177,5 @@ test('寫信 → 郵局 → 寄出 → 快轉 → 收信開信', async ({ page }
   await page.goto('/track/' + no);
   await expect(page.locator('.detail .chip').first()).toHaveText('已簽收');
 });
+});
+}

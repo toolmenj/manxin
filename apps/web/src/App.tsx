@@ -2,6 +2,10 @@ import { type ReactNode } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { Empty, Modal } from './components/common.tsx';
 import { Header, viewOf } from './components/Header.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import { AccountPage } from './pages/Account.tsx';
+import { AdminPage } from './pages/Admin.tsx';
+import { PrivacyPage, TermsPage } from './pages/Legal.tsx';
 import { CollectionPage } from './pages/Collection.tsx';
 import { DeskPage } from './pages/Desk.tsx';
 import { HomePage } from './pages/Home.tsx';
@@ -34,13 +38,14 @@ function View({ id, children, login = true }: { id: string; children: ReactNode;
   }
   return (
     <section id={'v-' + id} className="entering" key={id}>
-      {body}
+      <ErrorBoundary resetKey={loc.pathname}>{body}</ErrorBoundary>
     </section>
   );
 }
 
 function Shell() {
   const loc = useLocation();
+  const nav = useNavigate();
   const v = viewOf(loc.pathname);
   return (
     <>
@@ -57,10 +62,19 @@ function Shell() {
           <Route path="/coll" element={<View id="coll"><CollectionPage /></View>} />
           <Route path="/tomb" element={<View id="tomb"><TombPage /></View>} />
           <Route path="/login" element={<View id="login" login={false}><LoginPage /></View>} />
+          <Route path="/account" element={<View id="account"><AccountPage /></View>} />
+          <Route path="/privacy" element={<View id="privacy" login={false}><PrivacyPage /></View>} />
+          <Route path="/terms" element={<View id="terms" login={false}><TermsPage /></View>} />
+          <Route path="/admin" element={<View id="admin"><AdminPage /></View>} />
           <Route path="/mailbox" element={<View id="mailbox" login={false}><MailboxPage /></View>} />
           <Route path="*" element={<View id="404" login={false}><Empty title="這裡什麼都沒有" /></View>} />
         </Routes>
       </main>
+      <footer className="site-foot">
+        <a href="/privacy" onClick={(e) => (e.preventDefault(), nav('/privacy'))}>隱私權政策</a>
+        <span aria-hidden="true">・</span>
+        <a href="/terms" onClick={(e) => (e.preventDefault(), nav('/terms'))}>使用條款</a>
+      </footer>
       <Modal />
     </>
   );

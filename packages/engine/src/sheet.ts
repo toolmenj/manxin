@@ -243,7 +243,8 @@ export function fitText(c: SheetContent, p: PaperRef, text: string): number {
   if (!c.cursor) return cs.length;
   const g = paperGrid(p);
   const occ = occupancy(c.chars, g);
-  let cur = normCursor(c.cursor, g);
+  // 不先把行尾的打字頭移到下一行：placeChar 自己會換行（見 applyOp 的說明）
+  let cur: Cell = c.cursor;
   for (let i = 0; i < cs.length; i++) {
     const r = placeChar(cs[i]!, cur, occ, g);
     if ((r.p && r.p[0] >= g.maxRows) || (!r.p && r.cur[0] >= g.maxRows)) return i;
@@ -271,7 +272,10 @@ export function applyOp(c: SheetContent, op: SheetOp, paper: PaperRef = DEFAULT_
       if (!c.cursor) return { ...c, chars: [...c.chars, ...cs.map((ch) => ({ c: ch, m: [] }))] };
       const g = paperGrid(paper);
       const occ = occupancy(c.chars, g);
-      let cur = normCursor(c.cursor, g);
+      // 打字頭停在行尾（剛好打滿一行）時不先移到下一行：
+      // 下一個字放不下 placeChar 自己會換行；按換行就是到下一行開頭，不會多空一行。
+      // 這樣結果跟字怎麼分批送無關，而且逐筆套用（前端）＝整張重放（伺服器，applyOps）。
+      let cur: Cell = c.cursor;
       const add = cs.map((ch) => {
         const r = placeChar(ch, cur, occ, g);
         cur = r.cur;
@@ -312,7 +316,7 @@ export function applyOps(ops: readonly SheetOp[], paper: PaperRef = DEFAULT_PAPE
         for (const ch of splitChars(op.text)) {
           if (!cursor) chars.push({ c: ch, m: [] });
           else {
-            const r = placeChar(ch, normCursor(cursor, g), occ!, g);
+            const r = placeChar(ch, cursor, occ!, g);
             cursor = r.cur;
             chars.push(r.p ? { c: ch, m: [], p: r.p } : { c: ch, m: [] });
           }

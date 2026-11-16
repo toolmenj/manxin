@@ -1,7 +1,7 @@
 /**
  * 登入：email magic link（D-008 暫定）。/login?token=… 是登入信裡的連結。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api, isApiError } from '../api/client.ts';
 import { okMail } from '../lib/util.ts';
@@ -19,7 +19,9 @@ export function LoginPage() {
   const [err, setErr] = useState<string | null>(null);
   const tried = useRef(false);
 
-  useEffect(() => {
+  // D-030：登入連結只能用一次。郵件安全掃描器會自動打開信裡的連結，
+  // 所以不能一打開就登入，要使用者按一下「登入」才換成 session。
+  const verify = () => {
     if (!token || tried.current) return;
     tried.current = true;
     setBusy(true);
@@ -28,11 +30,11 @@ export function LoginPage() {
       .then((r) => {
         app.setUser(r.user);
         app.toast('登入了。');
-        nav(next.startsWith('/') ? next : '/desk', { replace: true });
+        nav(next.startsWith('/') && !next.startsWith('//') ? next : '/desk', { replace: true });
       })
       .catch((e) => setErr(isApiError(e, 'INVALID_TOKEN') ? '這個登入連結無效或過期了（15 分鐘內有效，只能用一次）。再寄一次吧。' : (e as Error).message))
       .finally(() => setBusy(false));
-  }, [token, next, app, nav]);
+  };
 
   const send = async () => {
     const v = email.trim();
@@ -67,7 +69,16 @@ export function LoginPage() {
     <div className="login panel">
       <h2 className="h2">用電子信箱登入</h2>
       {token ? (
-        <p className="hint">{busy ? '正在確認登入連結…' : err}</p>
+        err ? (
+          <p className="hint">{err}</p>
+        ) : (
+          <>
+            <p>按下面的按鈕完成登入。</p>
+            <button type="button" className="btn primary" id="loginConfirm" disabled={busy} onClick={verify}>
+              {busy ? '登入中…' : '登入慢信'}
+            </button>
+          </>
+        )
       ) : sent ? (
         <>
           <p>
@@ -101,6 +112,10 @@ export function LoginPage() {
             </button>
           </form>
           {err && <p className="hint warn-text">{err}</p>}
+          <p className="hint">
+            登入即表示你同意<a href="/terms" onClick={(e) => (e.preventDefault(), nav('/terms'))}>使用條款</a>與
+            <a href="/privacy" onClick={(e) => (e.preventDefault(), nav('/privacy'))}>隱私權政策</a>。
+          </p>
           {app.devOffset !== null && <p className="hint">開發用範例帳號：zhe@example.com（寄件人）、wen@example.org（收件人）。</p>}
         </>
       )}

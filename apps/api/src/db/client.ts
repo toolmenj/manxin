@@ -17,13 +17,30 @@ export interface DbHandle {
   close(): Promise<void>;
 }
 
-export const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle');
+/** 遷移檔資料夾。打包成單一檔案（Docker）時用環境變數指定 */
+export const MIGRATIONS_DIR = process.env.MIGRATIONS_DIR
+  ? path.resolve(process.env.MIGRATIONS_DIR)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../drizzle');
 
-export async function connectPg(url: string): Promise<DbHandle> {
+export interface PgOptions {
+  max?: number;
+  ssl?: boolean;
+}
+
+export async function connectPg(url: string, o: PgOptions = {}): Promise<DbHandle> {
   const { Pool } = (await import('pg')).default;
   const { drizzle } = await import('drizzle-orm/node-postgres');
   const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-  const pool = new Pool({ connectionString: url, max: 10 });
+  const pool = new Pool({
+    connectionString: url,
+    max: o.max ?? 10,
+    ssl: o.ssl ? { rejectUnauthorized: true } : undefined,
+    // 卡住的查詢與閒置連線不要無限期佔著（review 低：DB 連線設定）
+    statement_timeout: 30_000,
+    idle_in_transaction_session_timeout: 60_000,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+  });
   const db = drizzle(pool, { schema });
   return {
     db: db as unknown as Db,
@@ -47,5 +64,5 @@ export async function connectPglite(dataDir?: string): Promise<DbHandle> {
   };
 }
 
-export const connect = (driver: 'pg' | 'pglite', url: string): Promise<DbHandle> =>
-  driver === 'pglite' ? connectPglite() : connectPg(url);
+export const connect = (driver: 'pg' | 'pglite', url: string, o: PgOptions = {}): Promise<DbHandle> =>
+  driver === 'pglite' ? connectPglite() : connectPg(url, o);

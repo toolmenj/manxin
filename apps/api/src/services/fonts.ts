@@ -4,12 +4,14 @@
  * 收件人不一定登入，所以另有用開信連結讀字型檔的路徑（routes/receive.ts）。
  */
 import { randomUUID } from 'node:crypto';
-import type { FontDTO } from '@manxin/shared';
-import { and, asc, count, eq } from 'drizzle-orm';
+import { BUILTIN_FONTS, type FontDTO } from '@manxin/shared';
+import { and, asc, count, eq, sql } from 'drizzle-orm';
 import type { Ctx } from '../context.ts';
 import type { Db } from '../db/client.ts';
-import { fonts } from '../db/schema.ts';
+import { blobs, fonts, sheets, shipments } from '../db/schema.ts';
 import { fail, notFound } from '../lib/errors.ts';
+import { lockUser } from './abuse.ts';
+import { assertStorageQuota } from './quota.ts';
 
 type FontRow = typeof fonts.$inferSelect;
 
@@ -78,7 +80,11 @@ export async function fontById(db: Db, id: string): Promise<FontRow | null> {
 
 /** 信紙設定的 font：自訂字型必須是自己上傳的 */
 export async function assertFontUsable(db: Db, userId: string, font: string): Promise<void> {
-  if (!font.startsWith(FONT_PREFIX)) return;
+  // 內建字型只收清單裡的（review 低：以前任意字串都收，只靠前端擋）
+  if (!font.startsWith(FONT_PREFIX)) {
+    if (!(BUILTIN_FONTS as readonly string[]).includes(font)) fail(422, 'INVALID_OP', '沒有這個字型');
+    return;
+  }
   const id = customFontId(font);
   if (!id) fail(422, 'INVALID_OP', '沒有這個字型');
   const rows = await db
@@ -95,15 +101,38 @@ export async function addFont(ctx: Ctx, userId: string, file: { name: string; da
   const fmt = sniffFont(file.data);
   if (!fmt || !extOk(ext, fmt)) fail(422, 'INVALID_OP', '這個檔案讀不成字型，請用 ttf、otf、woff 或 woff2', { reason: 'BAD_FONT' });
   return ctx.db.transaction(async (tx) => {
+    // 鎖住使用者：同時上傳好幾個也不會超過上限（review M13）
+    await lockUser(tx, userId);
+    await assertStorageQuota(tx, userId, file.data.length);
     const [c] = await tx.select({ n: count() }).from(fonts).where(eq(fonts.userId, userId));
     if ((c?.n ?? 0) >= FONT_MAX_PER_USER) fail(409, 'CONFLICT', `字型最多存 ${FONT_MAX_PER_USER} 個`, { max: FONT_MAX_PER_USER });
     const id = randomUUID();
-    const stored = await ctx.storage.put(`font-${id}`, file.data);
+    const stored = await ctx.storage.put(`font-${id}`, file.data, tx, ctx.clock.now());
     const name = file.name.replace(/\.[A-Za-z0-9]+$/, '').trim().slice(0, 60) || '自訂字型';
     const [row] = await tx
       .insert(fonts)
       .values({ id, userId, name, format: fmt!, mime: MIME[fmt!], size: file.data.length, path: stored, createdAt: ctx.clock.date() })
       .returning();
     return fontDTO(row!);
+  });
+}
+
+/**
+ * 刪除字型（D-036：可刪未使用的）。任何信紙（書桌上、桌邊、字紙冢、已寄出）或寄出的信封用到就不能刪，
+ * 不然收件人或自己的舊信會顯示不出來。
+ */
+export async function deleteFont(ctx: Ctx, userId: string, id: string): Promise<{ ok: true }> {
+  return ctx.db.transaction(async (tx) => {
+    const f = await ownFont(tx, userId, id);
+    const key = fontKey(f.id);
+    const [inSheets] = await tx.select({ n: count() }).from(sheets).where(eq(sheets.font, key));
+    const [inPkgs] = await tx
+      .select({ n: count() })
+      .from(shipments)
+      .where(sql`${shipments.pkg}->>'efont' = ${key}`);
+    if ((inSheets?.n ?? 0) + (inPkgs?.n ?? 0) > 0) fail(409, 'CONFLICT', '有信紙用到這個字型，不能刪', { reason: 'FONT_IN_USE' });
+    await tx.delete(fonts).where(eq(fonts.id, f.id));
+    await tx.delete(blobs).where(eq(blobs.key, f.path));
+    return { ok: true as const };
   });
 }

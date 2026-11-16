@@ -26,7 +26,9 @@ import { emailEdits, letters, shipments, trips } from '../db/schema.ts';
 import { EMAIL_RE, normEmail } from '../lib/crypto.ts';
 import { fail, notFound } from '../lib/errors.ts';
 import { readyToPost } from './counter.ts';
+import { assertCanSend, lockUser } from './abuse.ts';
 import { enqueue } from './jobs.ts';
+import { LIST_CONCURRENCY, mapLimit } from '../lib/async.ts';
 import { currentSheet, EMPTY_ENV } from './letters.ts';
 
 export type ShipmentRow = typeof shipments.$inferSelect;
@@ -56,42 +58,62 @@ export async function shipStatus(db: Db, s: ShipmentRow, now: number): Promise<{
 /* ---------- 投郵筒 ---------- */
 
 export async function postLetter(ctx: Ctx, userId: string, letterId: string): Promise<ShipmentDTO> {
+  // 外部服務（天氣、快遞天數）在交易外先準備好，不要在交易裡等外部 API（review H7）
+  const L0 = (await ctx.db.select().from(letters).where(eq(letters.id, letterId)))[0];
+  const env0 = { ...EMPTY_ENV, ...((L0?.userId === userId ? L0.env : {}) as Partial<EnvAddress>) };
+  const now0 = ctx.clock.now();
+  const weather = await ctx.weather.prepare(parsePlace(env0.toAddr)?.city ?? domain(env0.toEmail), now0, now0 + 40 * D);
+  const courier = await ctx.courier.prepare(env0.fromAddr, env0.toAddr);
+
   const s = await ctx.db.transaction(async (tx) => {
+    // 鎖住使用者：同一個人同時投好幾封，上限計數也不會被繞過
+    const u = await lockUser(tx, userId);
     const { L, dto, trip } = await readyToPost(ctx, tx, userId, letterId);
-    const env = { ...EMPTY_ENV, ...(L.env as Partial<EnvAddress>) };
+    // 寄件人信箱一律用帳號信箱：提醒信、退信只會寄回本人（review 低：fromEmail 未驗證）
+    const env = { ...EMPTY_ENV, ...(L.env as Partial<EnvAddress>), fromEmail: u.email };
     const now = ctx.clock.now();
-    let no = trackNo(L.id + now);
-    for (let i = 1; (await tx.select({ id: shipments.id }).from(shipments).where(eq(shipments.no, no))).length; i++) {
-      no = trackNo(`${L.id}${now}#${i}`);
-    }
+    await assertCanSend(tx, u, env.toEmail, now, ctx.cfg.sendLimit);
     const office = placeById(trip.place)?.name ?? trip.place;
     const sh = await currentSheet(tx, L.id);
     const { letterId: _l, missing: _m, envLocked: _e, addrOk: _a, emode: _em, ...rest } = dto;
     const pkg: Pkg = { ...rest, efont: sh.font };
-    const wPlace = parsePlace(env.toAddr)?.city ?? domain(env.toEmail);
-    const weather = await ctx.weather.prepare(wPlace, now, now + 40 * D);
-    const courier = await ctx.courier.prepare(env.fromAddr, env.toAddr);
-    const P = plan({ no, sentAt: now, office, box: trip.box as 'green' | 'red', env }, { calendar: ctx.calendar, weather, courier });
-    const [row] = await tx
-      .insert(shipments)
-      .values({
-        no,
-        letterId: L.id,
-        userId,
-        sentAt: new Date(now),
-        office,
-        box: trip.box,
-        env,
-        pkg,
-        plan: P,
-        deliverAt: new Date(P.deliver),
-        recv: initialRecv(),
-        createdAt: new Date(now),
-      })
-      .returning();
+    let row: ShipmentRow | undefined;
+    // 單號撞號（同時寄出、雜湊剛好一樣）就換一個再試；用 savepoint，失敗不會讓整個交易作廢（review 低）
+    for (let i = 0; !row; i++) {
+      const no = trackNo(i === 0 ? L.id + now : `${L.id}${now}#${i}`);
+      const P = plan({ no, sentAt: now, office, box: trip.box as 'green' | 'red', env }, { calendar: ctx.calendar, weather, courier });
+      try {
+        row = await tx.transaction(async (sp) => {
+          const [r] = await sp
+            .insert(shipments)
+            .values({
+              no,
+              letterId: L.id,
+              userId,
+              sentAt: new Date(now),
+              office,
+              box: trip.box,
+              env,
+              pkg,
+              plan: P,
+              deliverAt: new Date(P.deliver),
+              recv: initialRecv(),
+              createdAt: new Date(now),
+            })
+            .returning();
+          return r!;
+        });
+      } catch (e) {
+        const code = (e as { code?: string; cause?: { code?: string } }).code ?? (e as { cause?: { code?: string } }).cause?.code;
+        if (code !== '23505' || i >= 5) throw e;
+        const dup = await tx.select({ id: shipments.id }).from(shipments).where(eq(shipments.letterId, L.id));
+        if (dup.length) fail(409, 'LETTER_LOCKED', '這封信已經寄出了');
+      }
+    }
+    const P = row.plan as Plan;
     await tx.update(letters).set({ status: 'sent', sentAt: new Date(now) }).where(eq(letters.id, L.id));
     await tx.update(trips).set({ endedAt: new Date(now), endReason: 'posted' }).where(eq(trips.id, trip.id));
-    const id = row!.id;
+    const id = row.id;
     const jobs: [string, string, number, Record<string, unknown>][] = [
       ['deliver', `deliver:${id}:0`, P.deliver, { seq: 0 }],
       ['remind24', `remind24:${id}`, P.deliver + D, {}],
@@ -99,7 +121,7 @@ export async function postLetter(ctx: Ctx, userId: string, letterId: string): Pr
       ['return30', `return30:${id}`, P.deliver + 30 * D, {}],
     ];
     for (const [kind, uniqueKey, runAt, payload] of jobs) await enqueue(tx, { kind, uniqueKey, refId: id, runAt, payload, now });
-    return row!;
+    return row;
   });
   return shipmentDTO(ctx, s);
 }
@@ -136,6 +158,7 @@ export async function shipmentDTO(ctx: Ctx, s: ShipmentRow, db: Db = ctx.db): Pr
     curEmail: st.curEmail,
     curDeliver: st.curDeliver,
     editsLeft: st.editsLeft,
+    reminded48: st.rem2,
     reached: st.reached,
     stops: P.stops,
     events: timeline(s, st, input, now),
@@ -155,7 +178,7 @@ export async function shipmentDTO(ctx: Ctx, s: ShipmentRow, db: Db = ctx.db): Pr
 
 export async function myShipments(ctx: Ctx, userId: string): Promise<ShipmentDTO[]> {
   const rows = await ctx.db.select().from(shipments).where(eq(shipments.userId, userId)).orderBy(desc(shipments.sentAt));
-  return Promise.all(rows.map((s) => shipmentDTO(ctx, s)));
+  return mapLimit(rows, LIST_CONCURRENCY, (s) => shipmentDTO(ctx, s));
 }
 
 async function myShipment(db: Db, userId: string, no: string, lock = false): Promise<ShipmentRow> {
@@ -207,18 +230,18 @@ export const maskEmail = (e: string): string => {
   return `${u!.slice(0, 1)}***@${d}`;
 };
 
+/**
+ * 公開查詢（D-031：只顯示狀態）。不用登入，所以不透露寄收地區、郵局、信箱與簽收時間（review M8）；
+ * 只留沒有地點的物流事件與目前狀態。完整明細給寄件人登入後看（GET /shipments/:no）。
+ */
 export async function publicTrack(ctx: Ctx, no: string): Promise<TrackDTO> {
   const rows = await ctx.db.select().from(shipments).where(eq(shipments.no, no.toUpperCase()));
   const s = rows[0] ?? notFound('查無此單號');
   const now = ctx.clock.now();
-  const { st, input } = await shipStatus(ctx.db, s, now);
+  const { st } = await shipStatus(ctx.db, s, now);
   const P = s.plan as Plan;
-  const ev: PlanEvent[] = P.events.filter((e) => e.t <= now).map((e) => ({ ...e, pl: e.pl.includes('@') ? maskEmail(e.pl) : e.pl }));
-  input.edits.forEach((x) => {
-    if (x.deliverAt <= now) ev.push({ t: x.deliverAt, tx: '已重新投遞', pl: maskEmail(x.email), k: 'ok' });
-  });
-  if (input.signedAt != null && input.signedAt <= now) ev.push({ t: input.signedAt, tx: '已簽收', pl: maskEmail(st.curEmail), k: 'ok' });
-  if (st.state === 'returned') ev.push({ t: st.ret, tx: '30 天無人簽收，已退回', pl: P.dest, k: 'bad' });
+  const ev: PlanEvent[] = P.events.filter((e) => e.t <= now).map((e) => ({ ...e, pl: '' }));
+  if (st.state === 'returned') ev.push({ t: st.ret, tx: '30 天無人簽收，已退回', pl: '', k: 'bad' });
   ev.sort((a, b) => b.t - a.t);
-  return { no: s.no, state: st.state, office: s.office, stops: P.stops, reached: st.reached, events: ev };
+  return { no: s.no, state: st.state, office: '', stops: [], reached: 0, events: ev };
 }

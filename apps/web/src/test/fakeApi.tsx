@@ -95,6 +95,7 @@ export function letterOf(text: string, o: Partial<LetterDTO> = {}): LetterDTO {
     shelvedAt: null,
     askedAt: null,
     askDue: false,
+    askAt: null,
     trip: null,
     ...o,
   };

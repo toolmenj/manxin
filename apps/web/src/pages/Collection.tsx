@@ -51,7 +51,13 @@ export function CollectionPage() {
         setC(c);
         const ls = await Promise.all(
           c.letters.map(async (l) => {
-            const token = knownTokens()[l.no] ?? null;
+            // D-025：換瀏覽器也看得到——這個瀏覽器沒記住連結，就向伺服器拿
+            const token =
+              knownTokens()[l.no] ??
+              (await api
+                .collectionLink(l.no)
+                .then((r) => r.link.replace(/^\/r\//, ''))
+                .catch(() => null));
             const dto = token ? await api.recv(token).catch(() => null) : null;
             return { ...l, token, dto };
           }),

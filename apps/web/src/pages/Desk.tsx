@@ -15,7 +15,7 @@ import { anim, INOUT, RM } from '../lib/motion.ts';
 import { guardNoRegret, guardWritingArea } from '../lib/noRegret.ts';
 import { buildPaper, cellFromPoint, drawInk, drawX, fontLoaded, FONTS, hasContent, inHandArea, INKS, isCustomFont, PENS, registerFont, renderType, strokeDraw, type Paper } from '../lib/paper.ts';
 import { DESKS, type DeskKind, type TwMode } from '../lib/prefs.ts';
-import { PinyinComposer } from '../lib/pinyin.ts';
+import { loadPhrases, PinyinComposer } from '../lib/pinyin.ts';
 import { trashScene } from '../lib/scenes.ts';
 import { contentOf, paperOfSheet, SheetWriter, type WriterStatus } from '../lib/sheetWriter.ts';
 import { D, fmt } from '../lib/time.ts';
@@ -79,7 +79,7 @@ export function DeskPage() {
   const [toolsOpen, setToolsOpen] = useState(true);
   const [unsent, setUnsent] = useState<LetterDTO[]>([]);
   /** 自己上傳過的字型（存在後端，D-027；選單本身讀 FONTS，這個 state 只是讓選單重畫）與內建信紙範本 */
-  const [, setMyFonts] = useState<FontDTO[]>([]);
+  const [myFonts, setMyFonts] = useState<FontDTO[]>([]);
   const [templates, setTemplates] = useState<PaperTemplateDTO[]>([]);
   const writer = useRef<SheetWriter | null>(null);
 
@@ -94,12 +94,12 @@ export function DeskPage() {
       writer.current = new SheetWriter(letter.sheet, {
         send: (op, m) =>
           op.kind === 'chars'
-            ? api.appendChars(id, op.text, m)
+            ? api.appendChars(id, op.text, m, true)
             : op.kind === 'mark'
-              ? api.appendMark(id, op.at, op.tool, m)
+              ? api.appendMark(id, op.at, op.tool, m, true)
               : op.kind === 'move'
-                ? api.appendMove(id, op.at, m)
-                : api.appendStroke(id, op.stroke, m),
+                ? api.appendMove(id, op.at, m, true)
+                : api.appendStroke(id, op.stroke, m, true),
         reload: async () => (await api.getLetter(id)).sheet,
         onChange: (d, st) => {
           setSheet(d);
@@ -359,6 +359,10 @@ export function DeskPage() {
   // 拼音鍵盤：字母先進組字器，選定的字才寫到紙上
   const py = useRef<PinyinComposer | null>(null);
   if (!py.current) py.current = new PinyinComposer((t) => typeChars(t), (ps) => tw.current?.pinyin(ps));
+  // 用拼音鍵盤時才載入詞組（500 多 KB），載入完讓候選更新一次
+  useEffect(() => {
+    if (prefs.twMode === 'py') void loadPhrases().then(() => py.current?.refresh());
+  }, [prefs.twMode]);
   const feedPy = useCallback((str: string) => {
     const s = st.current;
     if (s.trip || !s.sheet || s.sheet.mode !== 'type' || s.fixMode) return;
@@ -892,6 +896,19 @@ export function DeskPage() {
     }
   };
 
+  /** D-036：刪掉沒有任何信紙用到的字型（有用到伺服器會拒絕） */
+  const removeFont = async (f: FontDTO) => {
+    if (!confirm(`刪掉字型「${f.name}」？`)) return;
+    try {
+      await api.dropFont(f.id);
+      delete FONTS[f.font];
+      setMyFonts((fs) => fs.filter((x) => x.id !== f.id));
+      toast('字型刪掉了。');
+    } catch (e) {
+      toast(isApiError(e, 'CONFLICT') ? '有信紙用到這個字型（包括寄出去的信），不能刪。' : (e as Error).message);
+    }
+  };
+
   const setTwMode = (v: TwMode) => {
     setPrefs({ twMode: v });
     if (v !== 'py') py.current?.clear();
@@ -1133,6 +1150,21 @@ export function DeskPage() {
               上傳字型
               <input type="file" accept=".ttf,.otf,.woff,.woff2" hidden onChange={(e) => (void onFontFile(e.target.files?.[0]), (e.target.value = ''))} />
             </label>
+            {myFonts.length > 0 && (
+              <details className="font-manage">
+                <summary>管理上傳的字型（{myFonts.length}）</summary>
+                <ul className="plain-list">
+                  {myFonts.map((f) => (
+                    <li key={f.id}>
+                      <span>{f.name}</span>
+                      <button type="button" className="btn small ghost" disabled={sheet.font === f.font} title={sheet.font === f.font ? '這張信紙正在用' : ''} onClick={() => void removeFont(f)}>
+                        刪除
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </div>
           <div className="tgroup" id="handOpts" hidden={sheet.mode !== 'hand'}>
             <span className="label">筆</span>

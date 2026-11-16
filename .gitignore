@@ -10,3 +10,6 @@ dist/
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/dist/
+# Kubernetes 的秘密（從 secret.example.yaml 複製後填值）
+deploy/k8s/secret.yaml
+deploy/.env.prod

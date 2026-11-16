@@ -1,6 +1,19 @@
 /** 信件內容（純文字）。日期用民國紀年。 */
 import { roc, spaced, tp, type ReturnPostmark } from '@manxin/engine';
 
+/**
+ * 寄件人自己填的名稱會出現在通知信裡：拿掉網址與換行、限制長度，不讓人拿來夾帶釣魚連結（review 低）。
+ */
+export function cleanName(name: string | null | undefined): string {
+  return (name ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/(https?:\/\/|www\.)\S*/gi, '')
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 30);
+}
+
 const when = (t: number) => `民國 ${roc(t).replace(/\./g, '/')} ${tp(t).toFormat('HH:mm')}`;
 
 export function deliveryMail(o: {
@@ -13,7 +26,7 @@ export function deliveryMail(o: {
   return {
     subject: '【慢信】有人給你寄了一封信',
     text: [
-      `${o.fromName || '有個人'}寫了一封${o.postcard ? '明信片' : '信'}給你，${when(o.sentAt)}從${o.office}寄出，現在送到了。`,
+      `${cleanName(o.fromName) || '有個人'}寫了一封${o.postcard ? '明信片' : '信'}給你，${when(o.sentAt)}從${o.office}寄出，現在送到了。`,
       '',
       '信不會自己打開。點下面的連結，親手拆開它：',
       o.link,

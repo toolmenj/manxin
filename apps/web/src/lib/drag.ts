@@ -8,7 +8,8 @@ export function dragPiece(
   src: HTMLElement,
   e: PointerEvent | React.PointerEvent,
   html: string,
-  onDrop: (cx: number, cy: number, ghost: HTMLElement) => Promise<boolean> | boolean,
+  /** cx, cy：拖著的東西的中心；px, py：放開時手指（滑鼠）的位置 */
+  onDrop: (cx: number, cy: number, ghost: HTMLElement, px: number, py: number) => Promise<boolean> | boolean,
   prepare?: (ghost: HTMLElement) => void,
 ): void {
   e.preventDefault();
@@ -20,7 +21,11 @@ export function dragPiece(
   const ox = e.clientX - r.left,
     oy = e.clientY - r.top;
   src.style.visibility = 'hidden';
+  let px = e.clientX,
+    py = e.clientY;
   const mv = (ev: PointerEvent) => {
+    px = ev.clientX;
+    py = ev.clientY;
     g.style.left = ev.clientX - ox + 'px';
     g.style.top = ev.clientY - oy + 'px';
   };
@@ -31,7 +36,7 @@ export function dragPiece(
     const gr = g.getBoundingClientRect();
     let ok = false;
     try {
-      ok = await onDrop(gr.left + gr.width / 2, gr.top + gr.height / 2, g);
+      ok = await onDrop(gr.left + gr.width / 2, gr.top + gr.height / 2, g, px, py);
     } catch {
       ok = false;
     }

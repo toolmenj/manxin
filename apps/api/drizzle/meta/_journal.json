@@ -36,6 +36,20 @@
       "when": 1792568343032,
       "tag": "0004_append_only_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794467229271,
+      "tag": "0005_launch_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794473731812,
+      "tag": "0006_abuse_prefs_snapshot",
+      "breakpoints": true
     }
   ]
 }

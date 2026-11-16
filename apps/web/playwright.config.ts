@@ -21,6 +21,8 @@ export default defineConfig({
     {
       command: 'npm run dev:api:pglite',
       cwd: '../..',
+      // 端到端測試的管理員與聯絡信箱（只在測試用的開發伺服器）
+      env: { ADMIN_EMAILS: 'admin@example.com', CONTACT_EMAIL: 'hello@manxin.example' },
       url: 'http://127.0.0.1:3000/health',
       reuseExistingServer: true,
       timeout: 120_000,

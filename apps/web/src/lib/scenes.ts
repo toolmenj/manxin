@@ -309,9 +309,11 @@ export async function postScene({ no, box, era }: PostSceneInput): Promise<void>
     const dx = br.left + br.width * 0.5 - (dr.left + dr.width / 2),
       dy = br.top + 10 - (dr.top + dr.height / 2);
     const drops = [0, 1].map((i) => {
-      const m = el('div', 'pb-mail' + (i === 1 ? ' ours' : ''));
-      m.style.left = dr.left - st.left + dr.width / 2 - 23 + 'px';
-      m.style.top = dr.top - st.top + dr.height / 2 - 14 + 'px';
+      // D-012：民國風格用直式中式信封（白底、朱紅框、由上方直著落下）
+      const vert = era === 'minguo';
+      const m = el('div', 'pb-mail' + (i === 1 ? ' ours' : '') + (vert ? ' vert' : ''));
+      m.style.left = dr.left - st.left + dr.width / 2 - (vert ? 14 : 23) + 'px';
+      m.style.top = dr.top - st.top + dr.height / 2 - (vert ? 23 : 14) + 'px';
       stage.append(m);
       const r = jit(10),
         d = i === 1 ? T.mailOurs : T.mail,

@@ -31,10 +31,10 @@ export async function devRoutes(app: FastifyInstance) {
   const clockState = () => ({ now: ctx.clock.now(), offsetMs: ctx.clock.offsetMs });
   app.get('/dev/clock', async () => clockState());
 
-  /** advanceMs：往前快轉；offsetMs：直接設定偏移；reset：歸零 */
+  /** advanceMs：往前快轉；offsetMs：直接設定偏移（不能是負的：時間不能倒流，review M6）；reset：歸零 */
   app.post<{ Body: { advanceMs?: number; offsetMs?: number; reset?: boolean } }>(
     '/dev/clock',
-    { schema: { body: obj({ advanceMs: num({ minimum: 0, maximum: 400 * 86400_000 }), offsetMs: num(), reset: bool }) } },
+    { schema: { body: obj({ advanceMs: num({ minimum: 0, maximum: 400 * 86400_000 }), offsetMs: num({ minimum: 0, maximum: 400 * 86400_000 }), reset: bool }) } },
     async (req) => {
       if (!ctx.clock.canShift) fail(403, 'DEV_ONLY', '正式環境不能調整時鐘');
       const b = req.body ?? {};
