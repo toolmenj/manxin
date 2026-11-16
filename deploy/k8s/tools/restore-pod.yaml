@@ -1,0 +1,20 @@
+# 還原備份用的暫時 Pod（不在 kustomization 裡，平常不會部署）。用法見 deploy/README.md「備份與還原」。
+apiVersion: v1
+kind: Pod
+metadata:
+  name: manxin-restore
+  namespace: manxin
+spec:
+  restartPolicy: Never
+  containers:
+    - name: restore
+      image: postgres:16-alpine
+      command: ["sleep", "3600"]
+      env:
+        - name: PGPASSWORD
+          valueFrom: { secretKeyRef: { name: manxin-secret, key: POSTGRES_PASSWORD } }
+      volumeMounts:
+        - { name: backup, mountPath: /backup }
+  volumes:
+    - name: backup
+      persistentVolumeClaim: { claimName: manxin-backup }

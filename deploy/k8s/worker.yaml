@@ -1,0 +1,39 @@
+# 排程 worker（D-033）：送達通知、24／48 小時提醒、30 天退信、抽屜詢問，以及用 Gmail 寄出待寄的信。
+# 一份就夠；要開多份也安全（FOR UPDATE SKIP LOCKED）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manxin-worker
+  labels: { app.kubernetes.io/name: manxin-worker }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app.kubernetes.io/name: manxin-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: manxin-worker }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: manxin
+          command: ["node", "--enable-source-maps", "dist/worker.mjs"]
+          envFrom:
+            - configMapRef: { name: manxin-config }
+            - secretRef: { name: manxin-secret }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

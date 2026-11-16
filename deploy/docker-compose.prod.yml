@@ -1,0 +1,67 @@
+# 在自己電腦把「正式環境」整套跑起來驗證（不是開發用）：
+#   docker compose -f deploy/docker-compose.prod.yml up --build
+# 打開 http://localhost:8080 用慢信；http://localhost:8025 看寄出的信（Mailpit 假郵件伺服器，信不會真的寄出去）。
+# 用的是同一個正式版映像檔、同一套正式設定檢查，只是網址用 http、寄信接到 Mailpit。
+name: manxin-prod-local
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: manxin
+      POSTGRES_PASSWORD: local-only-password
+      POSTGRES_DB: manxin
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U manxin -d manxin"]
+      interval: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ["8025:8025"]
+
+  migrate:
+    build: { context: .., dockerfile: Dockerfile }
+    image: manxin:local
+    command: ["node", "dist/migrate.mjs"]
+    environment: &env
+      NODE_ENV: production
+      APP_URL: http://localhost:8080
+      ALLOW_HTTP_APP_URL: "true" # 只有本機驗證才這樣；正式環境一定要 https
+      APP_SECRET: local-only-0123456789abcdef0123456789abcdef
+      DATABASE_URL: postgres://manxin:local-only-password@postgres:5432/manxin
+      MAILER: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_SECURE: "false"
+      SMTP_USER: local
+      SMTP_PASS: local
+      MAIL_FROM: 慢信 <letters@manxin.local>
+      ADMIN_EMAILS: admin@manxin.local
+      CONTACT_EMAIL: hello@manxin.local
+      TRUST_PROXY: "false"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    image: manxin:local
+    environment:
+      <<: *env
+      WORKER_INLINE: "false"
+    ports: ["8080:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    image: manxin:local
+    command: ["node", "--enable-source-maps", "dist/worker.mjs"]
+    environment:
+      <<: *env
+      # 本機驗證時輪詢快一點
+      WORKER_INTERVAL_MS: "5000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  pgdata:

@@ -1,0 +1,28 @@
+# 對外入口。假設叢集用 ingress-nginx；HTTPS 憑證由 cert-manager 自動申請（沒有就先拿掉 tls 與 annotations 的 cert-manager 那行）。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: manxin
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    # 字型上限 20 MB，留一點空間
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+    # 整站粗略的每秒請求限制（同一個 IP）；細的限制（登入信、開信連結）在程式裡
+    nginx.ingress.kubernetes.io/limit-rps: "30"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["manxin.example.tw"]
+      secretName: manxin-tls
+  rules:
+    - host: manxin.example.tw # ← 改成你的網域，並和 configmap.yaml 的 APP_URL 一致
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: manxin-api
+                port: { number: 80 }
