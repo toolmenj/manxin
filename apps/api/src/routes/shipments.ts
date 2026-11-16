@@ -3,6 +3,7 @@ import { isValidTrackNo } from '@manxin/engine';
 import type { FastifyInstance } from 'fastify';
 import { requireUser, user } from '../app.ts';
 import { fail } from '../lib/errors.ts';
+import { byIp, byUser, HOUR, limit, MIN } from '../lib/rateLimit.ts';
 import { getCollection } from '../services/receive.ts';
 import { editRecipientEmail, getMyShipment, myShipments, publicTrack } from '../services/shipments.ts';
 import { obj, str } from './schemas.ts';
@@ -14,7 +15,7 @@ export async function shipmentRoutes(app: FastifyInstance) {
   const ctx = app.ctx;
 
   /** 公開查詢：信箱會遮掉 */
-  app.get<NoP>('/track/:no', { schema: { params: noParam } }, async (req) => {
+  app.get<NoP>('/track/:no', { schema: { params: noParam }, preHandler: limit([{ name: 'track-ip', max: 60, windowMs: 10 * MIN, key: byIp }]) }, async (req) => {
     const no = req.params.no.toUpperCase();
     if (!isValidTrackNo(no)) fail(404, 'NOT_FOUND', '單號的檢查碼不對，請再確認一次');
     return publicTrack(ctx, no);
@@ -26,7 +27,7 @@ export async function shipmentRoutes(app: FastifyInstance) {
     r.get<NoP>('/shipments/:no', { schema: { params: noParam } }, async (req) => getMyShipment(ctx, user(req).id, req.params.no.toUpperCase()));
     r.post<NoP & { Body: { email: string } }>(
       '/shipments/:no/recipient-email',
-      { schema: { params: noParam, body: obj({ email: str({ maxLength: 254 }) }, ['email']) } },
+      { preHandler: limit([{ name: 'edit-email', max: 10, windowMs: HOUR, key: byUser }]), schema: { params: noParam, body: obj({ email: str({ maxLength: 254 }) }, ['email']) } },
       async (req) => editRecipientEmail(ctx, user(req).id, req.params.no.toUpperCase(), req.body.email),
     );
     r.get('/collection', async (req) => getCollection(ctx, user(req).email));

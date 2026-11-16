@@ -5,6 +5,10 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireUser, user } from '../app.ts';
 import { fail } from '../lib/errors.ts';
+import { sendUserFile } from '../services/storage.ts';
+import { byUser, HOUR, limit } from '../lib/rateLimit.ts';
+
+const uploadLimit = limit([{ name: 'upload-user', max: 120, windowMs: HOUR, key: byUser }]);
 import {
   addAttachment,
   appendToSheet,
@@ -25,7 +29,7 @@ import {
   unshelve,
   type Purpose,
 } from '../services/letters.ts';
-import { addFont, listFonts, ownFont } from '../services/fonts.ts';
+import { addFont, deleteFont, listFonts, ownFont } from '../services/fonts.ts';
 import { appendMetaProps, enm, envSchema, int, obj, str, strokeSchema, uuidParam } from './schemas.ts';
 
 type IdP = { Params: { id: string } };
@@ -88,9 +92,13 @@ export async function deskRoutes(app: FastifyInstance) {
   /* ---- 只有追加 ---- */
 
   type Meta = { seq?: number; sheetId?: string; opId?: string };
-  const meta = (b: Meta) => ({ seq: b.seq, sheetId: b.sheetId, opId: b.opId });
-  /** 已經寫過的 opId（重送）回 200，第一次寫入回 201；回應本體都是目前的信紙 */
+  const meta = (b: Meta, q?: unknown) => ({ seq: b.seq, sheetId: b.sheetId, opId: b.opId, delta: (q as { delta?: string } | undefined)?.delta === '1' });
+  /**
+   * 已經寫過的 opId（重送）回 200 與目前的信紙；第一次寫入回 201。
+   * 帶 ?delta=1 時第一次寫入只回這一筆操作（review M5），否則回整張信紙。
+   */
   const done = (reply: FastifyReply, r: Awaited<ReturnType<typeof appendToSheet>>) => {
+    if ('delta' in r) return reply.status(201).send(r);
     const { replayed, ...sheet } = r;
     return reply.status(replayed ? 200 : 201).send(sheet);
   };
@@ -98,7 +106,7 @@ export async function deskRoutes(app: FastifyInstance) {
   app.post<IdP & { Body: { text: string } & Meta }>(
     '/letters/:id/sheet/chars',
     { schema: { params: uuidParam(), body: obj({ text: str({ minLength: 1, maxLength: 4000 }), ...appendMetaProps }, ['text']) } },
-    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'chars', text: req.body.text }, meta(req.body))),
+    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'chars', text: req.body.text }, meta(req.body, req.query))),
   );
 
   /** 塗改：at（第幾個字的清單）或舊的 from–to 範圍，兩者擇一 */
@@ -124,7 +132,7 @@ export async function deskRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const b = req.body;
-      return done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'mark', from: b.from, to: b.to, at: b.at, tool: b.tool }, meta(b)));
+      return done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'mark', from: b.from, to: b.to, at: b.at, tool: b.tool }, meta(b, req.query)));
     },
   );
 
@@ -137,13 +145,13 @@ export async function deskRoutes(app: FastifyInstance) {
         body: obj({ at: { type: 'array', minItems: 2, maxItems: 2, items: int({ minimum: 0, maximum: 10000 }) }, ...appendMetaProps }, ['at']),
       },
     },
-    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'move', at: req.body.at }, meta(req.body))),
+    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'move', at: req.body.at }, meta(req.body, req.query))),
   );
 
   app.post<IdP & { Body: { stroke: { pen: string; color: string; pts: number[][] } } & Meta }>(
     '/letters/:id/sheet/strokes',
     { schema: { params: uuidParam(), body: obj({ stroke: strokeSchema, ...appendMetaProps }, ['stroke']) } },
-    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'stroke', stroke: req.body.stroke }, meta(req.body))),
+    async (req, reply) => done(reply, await appendToSheet(ctx, user(req).id, req.params.id, { kind: 'stroke', stroke: req.body.stroke }, meta(req.body, req.query))),
   );
 
   app.post<IdP & { Body: { attachmentId: string } }>(
@@ -180,7 +188,7 @@ export async function deskRoutes(app: FastifyInstance) {
 
   app.post<IdP & { Querystring: { purpose?: Purpose } }>(
     '/letters/:id/attachments',
-    { schema: { params: uuidParam(), querystring: obj({ purpose: enm(...PURPOSES) }) } },
+    { preHandler: uploadLimit, schema: { params: uuidParam(), querystring: obj({ purpose: enm(...PURPOSES) }) } },
     async (req, reply) => {
       if (!req.isMultipart()) fail(415, 'BAD_REQUEST', '請用 multipart/form-data 上傳，欄位名稱 file');
       const file = await req.file();
@@ -204,13 +212,12 @@ export async function deskRoutes(app: FastifyInstance) {
 
   app.get<IdP>('/attachments/:id', { schema: { params: uuidParam() } }, async (req, reply) => {
     const a = await ownAttachment(ctx.db, user(req).id, req.params.id);
-    reply.header('content-type', a.mime).header('cache-control', 'private, max-age=3600');
-    return reply.send(ctx.storage.read(a.path));
+    return sendUserFile(reply, a.mime, await ctx.storage.read(a.path, ctx.db), 'private, max-age=3600');
   });
 
   /* ---- 自訂字型（D-027：存在後端；信紙設定 font = 'f:<id>'） ---- */
 
-  app.post('/fonts', async (req, reply) => {
+  app.post('/fonts', { preHandler: uploadLimit }, async (req, reply) => {
     if (!req.isMultipart()) fail(415, 'BAD_REQUEST', '請用 multipart/form-data 上傳，欄位名稱 file');
     // 中文字型檔很大，上限另外設（FONT_MAX_BYTES），不跟圖片共用
     const file = await req.file({ limits: { fileSize: ctx.cfg.fontMaxBytes, files: 1 } });
@@ -225,9 +232,11 @@ export async function deskRoutes(app: FastifyInstance) {
 
   app.get('/fonts', async (req) => ({ fonts: await listFonts(ctx, user(req).id) }));
 
+  /** D-036：刪掉沒有任何信紙用到的字型 */
+  app.delete<IdP>('/fonts/:id', { schema: { params: uuidParam() } }, async (req) => deleteFont(ctx, user(req).id, req.params.id));
+
   app.get<IdP>('/fonts/:id', { schema: { params: uuidParam() } }, async (req, reply) => {
     const f = await ownFont(ctx.db, user(req).id, req.params.id);
-    reply.header('content-type', f.mime).header('cache-control', 'private, max-age=86400');
-    return reply.send(ctx.storage.read(f.path));
+    return sendUserFile(reply, f.mime, await ctx.storage.read(f.path, ctx.db), 'private, max-age=86400');
   });
 }

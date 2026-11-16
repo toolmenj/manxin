@@ -1,23 +1,30 @@
 /**
- * 收信：收件人的電子信箱。正式環境裡，收件人是從 email 的開信連結（/r/:token）進來的；
- * 開發環境沒有真的寄信，所以這裡從本機信箱（GET /dev/outbox）找出寄給你的開信通知，
- * 再加上這個瀏覽器開過的開信連結。
+ * 收信：收件人的信箱（D-024）。
+ * 用收到信的那個信箱登入，就看得到所有寄給你、已經送達的信（GET /inbox），換瀏覽器也找得到。
+ * 另外補上這個瀏覽器開過、但不是寄給目前登入信箱的開信連結。
  */
+import type { InboxItemDTO } from '@manxin/shared';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api } from '../api/client.ts';
 import { Empty } from '../components/common.tsx';
 import { knownTokens } from '../lib/prefs.ts';
 import { fmt } from '../lib/time.ts';
-import { deliveryLinks, useApp, type DeliveryLink } from '../state/app.tsx';
+import { useApp } from '../state/app.tsx';
 
-interface Item extends DeliveryLink {
-  opened: boolean | null;
+interface Item {
+  token: string;
+  no: string;
+  opened: boolean;
   fromName: string;
   postcard: boolean;
   office: string;
   sentAt: number;
+  /** true：寄給目前登入的信箱；false：這個瀏覽器開過的別的連結 */
+  mine: boolean;
 }
+
+const tokenOf = (link: string) => link.replace(/^\/r\//, '');
 
 function useInbox(): Item[] | null {
   const app = useApp();
@@ -25,21 +32,31 @@ function useInbox(): Item[] | null {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const links = app.user ? await deliveryLinks(app.user.email).catch(() => []) : [];
-      const seen = new Set(links.map((l) => l.no));
-      for (const [no, token] of Object.entries(knownTokens())) if (!seen.has(no)) links.push({ token, no, to: '', at: 0, subject: '', text: '' });
-      const out: Item[] = [];
+      const box: InboxItemDTO[] = app.user ? await api.inbox().then((r) => r.letters).catch(() => []) : [];
+      const out: Item[] = box.map((l) => ({
+        token: tokenOf(l.link),
+        no: l.no,
+        opened: l.opened,
+        fromName: l.fromName,
+        postcard: l.postcard,
+        office: '',
+        sentAt: l.sentAt,
+        mine: true,
+      }));
+      const seen = new Set(out.map((x) => x.no));
       await Promise.all(
-        links.map(async (l) => {
-          try {
-            const r = await api.recv(l.token);
-            out.push({ ...l, opened: r.recv.opened, fromName: r.fromName, postcard: r.pkg.env === 'card', office: r.office, sentAt: r.sentAt });
-          } catch {
-            /* 連結失效（改寄、退回）就不列 */
-          }
-        }),
+        Object.entries(knownTokens())
+          .filter(([no]) => !seen.has(no))
+          .map(async ([no, token]) => {
+            try {
+              const r = await api.recv(token);
+              out.push({ token, no, opened: r.recv.opened, fromName: r.fromName, postcard: r.pkg.env === 'card', office: r.office, sentAt: r.sentAt, mine: false });
+            } catch {
+              /* 連結失效（改寄、退回）就不列 */
+            }
+          }),
       );
-      out.sort((a, b) => b.at - a.at || b.sentAt - a.sentAt);
+      out.sort((a, b) => b.sentAt - a.sentAt);
       if (alive) setItems(out);
     })();
     return () => {
@@ -49,37 +66,41 @@ function useInbox(): Item[] | null {
   return items;
 }
 
+function Row({ x, pressed, onClick }: { x: Item; pressed: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="ship" data-rv={x.no} aria-pressed={pressed} onClick={onClick}>
+      <span className="row">
+        <b>【慢信】{x.fromName || '有人'}給你寄了一封{x.postcard ? '明信片' : '信'}</b>
+      </span>
+      <span className="row">
+        <span>{x.mine ? '寄到你的信箱' : '這個瀏覽器開過的連結'}</span>
+        <span className={'chip ' + (x.opened ? 'ok' : 'warn')}>{x.opened ? '已開信' : '還沒開'}</span>
+      </span>
+      <span className="row">
+        <span>{fmt(x.sentAt, { time: false })} 寄出</span>
+      </span>
+    </button>
+  );
+}
+
 export function InboxList({ current }: { current?: string }) {
   const nav = useNavigate();
   const items = useInbox();
   if (!items || !items.length) return <div className="col" />;
   return (
     <div className="col">
-      <span className="label">收件人的電子信箱</span>
+      <span className="label">你的信箱</span>
       <div className="ships">
         {items.map((x) => (
-          <button key={x.token} type="button" className="ship" data-rv={x.no} aria-pressed={x.token === current} onClick={() => nav('/r/' + x.token)}>
-            <span className="row">
-              <b>【慢信】有人給你寄了一封信</b>
-            </span>
-            <span className="row">
-              <span>{x.to ? `寄到 ${x.to}` : '這個瀏覽器開過的連結'}</span>
-              <span className={'chip ' + (x.opened ? 'ok' : 'warn')}>{x.opened ? '已開信' : '還沒開'}</span>
-            </span>
-            {x.at > 0 && (
-              <span className="row">
-                <span>{fmt(x.at)}</span>
-              </span>
-            )}
-          </button>
+          <Row key={x.token} x={x} pressed={x.token === current} onClick={() => nav('/r/' + x.token)} />
         ))}
       </div>
-      <p className="hint">正式版會真的寄 email 到收件人信箱，信裡附開信的連結。開發環境的信在「本機信箱」。</p>
     </div>
   );
 }
 
 export function InboxPage() {
+  const app = useApp();
   const nav = useNavigate();
   const items = useInbox();
   const [sel, setSel] = useState<string | null>(null);
@@ -87,42 +108,31 @@ export function InboxPage() {
   if (!items.length)
     return (
       <Empty title="信箱裡還沒有信">
-        <p>信送到你的電子信箱以後，會出現在這裡。開發時可以用右上角的「快轉」讓時間往前走，再到「本機信箱」看開信通知。</p>
+        <p>
+          寄給 {app.user?.email ?? '你'} 的信送到以後，會出現在這裡，也會寄一封通知到你的電子信箱。
+          {app.devOffset !== null && ' 開發時可以用右上角的「快轉」讓時間往前走。'}
+        </p>
       </Empty>
     );
   const s = items.find((x) => x.token === sel) ?? items[0]!;
   return (
     <div className="track-grid">
       <div className="col">
-        <span className="label">收件人的電子信箱</span>
+        <span className="label">你的信箱</span>
         <div className="ships">
           {items.map((x) => (
-            <button key={x.token} type="button" className="ship" data-rv={x.no} aria-pressed={x.token === s.token} onClick={() => setSel(x.token)}>
-              <span className="row">
-                <b>【慢信】有人給你寄了一封信</b>
-              </span>
-              <span className="row">
-                <span>{x.to ? `寄到 ${x.to}` : '這個瀏覽器開過的連結'}</span>
-                <span className={'chip ' + (x.opened ? 'ok' : 'warn')}>{x.opened ? '已開信' : '還沒開'}</span>
-              </span>
-              {x.at > 0 && (
-                <span className="row">
-                  <span>{fmt(x.at)}</span>
-                </span>
-              )}
-            </button>
+            <Row key={x.token} x={x} pressed={x.token === s.token} onClick={() => setSel(x.token)} />
           ))}
         </div>
-        <p className="hint">正式版會真的寄 email 到收件人信箱，信裡附開信的連結。開發環境的信在「本機信箱」。</p>
       </div>
       <div className="detail" id="rvDetail">
         <div className="mailbody panel">
-          <p className="hint">寄件人：慢信 &lt;letters@manxin.example&gt;</p>
-          <h3>有人給你寄了一封信</h3>
+          <h3>有人給你寄了一封{s.postcard ? '明信片' : '信'}</h3>
           <p>
-            {s.fromName || '有個人'}寫了一封{s.postcard ? '明信片' : '信'}給你，{fmt(s.sentAt, { time: false })}從{s.office}寄出，現在送到了。
+            {s.fromName || '有個人'}寫了一封{s.postcard ? '明信片' : '信'}給你，{fmt(s.sentAt, { time: false })}
+            {s.office ? `從${s.office}` : ''}寄出，現在送到了。
           </p>
-          <p>信不會自己打開。點下面的連結，親手拆開它。</p>
+          <p>信不會自己打開。點下面的按鈕，親手拆開它。</p>
           <div>
             <button type="button" className="btn primary" id="rvEnter" onClick={() => nav('/r/' + s.token)}>
               打開連結

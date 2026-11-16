@@ -1,0 +1,47 @@
+# 每天凌晨 3 點（臺北時間）備份資料庫，保留 14 天。
+# 備份檔放在另一個持久儲存區；要放到叢集外（NAS、雲端）請另外同步這個儲存區。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: manxin-backup
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: manxin-postgres-backup
+spec:
+  schedule: "0 19 * * *" # UTC 19:00 = 臺北 03:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: manxin-secret, key: POSTGRES_PASSWORD } }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  f=/backup/manxin-$(date -u +%Y%m%d-%H%M%S).dump
+                  pg_dump -h manxin-postgres -U manxin -d manxin -Fc -f "$f"
+                  echo "備份完成：$f（$(du -h "$f" | cut -f1)）"
+                  find /backup -name 'manxin-*.dump' -mtime +14 -delete
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+          volumes:
+            - name: backup
+              persistentVolumeClaim: { claimName: manxin-backup }

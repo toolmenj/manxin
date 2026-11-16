@@ -3,6 +3,7 @@
  */
 import { useNavigate, useLocation } from 'react-router';
 import { api } from '../api/client.ts';
+import { forgetTokens } from '../lib/prefs.ts';
 import { clockTxt, fmt, type Era } from '../lib/time.ts';
 import { useApp } from '../state/app.tsx';
 import { useNow } from './common.tsx';
@@ -21,6 +22,7 @@ export function viewOf(path: string): string {
   if (path === '/') return 'home';
   const seg = path.split('/')[1] ?? '';
   if (seg === 'r') return 'inbox';
+  if (seg === 'admin') return 'admin';
   return VIEWS.find(([, , p]) => p === '/' + seg)?.[0] ?? '';
 }
 
@@ -55,6 +57,7 @@ export function Header() {
 
   const logout = async () => {
     await api.logout().catch(() => undefined);
+    forgetTokens();
     app.setUser(null);
     nav('/');
     app.toast('登出了。');
@@ -76,6 +79,11 @@ export function Header() {
               {k in num ? <span className="n">{num[k] || ''}</span> : null}
             </button>
           ))}
+          {app.admin && (
+            <button type="button" data-view="admin" aria-current={cur === 'admin' ? 'page' : 'false'} onClick={() => nav('/admin')}>
+              管理
+            </button>
+          )}
         </nav>
         <div className="seg era" id="eraSeg" role="group" aria-label="年代風格">
           {(
@@ -115,9 +123,14 @@ export function Header() {
                     本機信箱
                   </button>
                   {app.user ? (
-                    <button type="button" className="btn small ghost" onClick={(e) => (void logout(), e.currentTarget.closest('details')?.removeAttribute('open'))}>
-                      登出
-                    </button>
+                    <>
+                      <button type="button" className="btn small" onClick={(e) => (nav('/account'), e.currentTarget.closest('details')?.removeAttribute('open'))}>
+                        帳號設定
+                      </button>
+                      <button type="button" className="btn small ghost" onClick={(e) => (void logout(), e.currentTarget.closest('details')?.removeAttribute('open'))}>
+                        登出
+                      </button>
+                    </>
                   ) : (
                     <button type="button" className="btn small" onClick={(e) => (nav('/login'), e.currentTarget.closest('details')?.removeAttribute('open'))}>
                       登入
@@ -131,9 +144,14 @@ export function Header() {
               <summary>帳號</summary>
               <div className="ffm">
                 <p>登入中：{app.user.email}</p>
-                <button type="button" className="btn small ghost" onClick={() => void logout()}>
-                  登出
-                </button>
+                <div className="row">
+                  <button type="button" className="btn small" onClick={(e) => (nav('/account'), e.currentTarget.closest('details')?.removeAttribute('open'))}>
+                    帳號設定
+                  </button>
+                  <button type="button" className="btn small ghost" onClick={() => void logout()}>
+                    登出
+                  </button>
+                </div>
               </div>
             </details>
           ) : (

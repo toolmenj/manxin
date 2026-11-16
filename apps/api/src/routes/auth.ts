@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { requireUser, user } from '../app.ts';
+import { byIp, HOUR, limit, MIN } from '../lib/rateLimit.ts';
+import { normEmail } from '../lib/crypto.ts';
+import { isAdmin } from '../services/admin.ts';
 import { logout, requestMagicLink, SESSION_COOKIE, verifyMagicLink } from '../services/auth.ts';
 
 export async function authRoutes(app: FastifyInstance) {
@@ -8,6 +11,11 @@ export async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { email: string } }>(
     '/auth/magic-link',
     {
+      // 同一個信箱一小時最多 5 封登入信、同一個 IP 一小時 30 次（避免寄信轟炸、燒寄信額度）
+      preHandler: limit([
+        { name: 'login-email', max: 5, windowMs: HOUR, key: (req) => normEmail((req.body as { email?: string })?.email ?? '') || null },
+        { name: 'login-ip', max: 30, windowMs: HOUR, key: byIp },
+      ]),
       schema: {
         body: { type: 'object', required: ['email'], additionalProperties: false, properties: { email: { type: 'string', maxLength: 254 } } },
       },
@@ -21,6 +29,7 @@ export async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { token: string } }>(
     '/auth/verify',
     {
+      preHandler: limit([{ name: 'verify-ip', max: 30, windowMs: 10 * MIN, key: byIp }]),
       schema: {
         body: { type: 'object', required: ['token'], additionalProperties: false, properties: { token: { type: 'string', maxLength: 200 } } },
       },
@@ -44,5 +53,6 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.status(204).send();
   });
 
-  app.get('/me', { preHandler: requireUser }, async (req) => ({ user: user(req) }));
+  // admin：前端用來決定要不要顯示管理頁入口（真正的權限檢查在 /admin 路由）
+  app.get('/me', { preHandler: requireUser }, async (req) => ({ user: user(req), admin: isAdmin(ctx, user(req).email) }));
 }

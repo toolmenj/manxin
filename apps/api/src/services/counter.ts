@@ -25,10 +25,10 @@ import {
   type MailboxColor,
 } from '@manxin/engine';
 import type { CounterDTO, EnvAddress, EnvelopeText, TripDTO } from '@manxin/shared';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { ms, type Ctx } from '../context.ts';
 import type { Db } from '../db/client.ts';
-import { counters, envelopeOps, letters, trips } from '../db/schema.ts';
+import { counterOps, counters, envelopeOps, letters, trips } from '../db/schema.ts';
 import { EMAIL_RE } from '../lib/crypto.ts';
 import { fail } from '../lib/errors.ts';
 import {
@@ -293,10 +293,19 @@ export async function appendEnvelope(
   ctx: Ctx,
   userId: string,
   letterId: string,
-  body: { zone: 'from' | 'to'; text?: string; stroke?: Stroke },
+  body: { zone: 'from' | 'to'; text?: string; stroke?: Stroke; opId?: string },
 ): Promise<CounterDTO> {
   return ctx.db.transaction(async (tx) => {
     const { c } = await atCounter(ctx, tx, userId, letterId);
+    // 同一個 opId 已經寫過（連點、回應遺失後重送）：不再寫一次，回目前的樣子（review 低）
+    const opId = body.opId?.toLowerCase();
+    if (opId) {
+      const done = await tx
+        .select({ seq: envelopeOps.seq })
+        .from(envelopeOps)
+        .where(and(eq(envelopeOps.letterId, c.letterId), eq(envelopeOps.opId, opId)));
+      if (done.length) return counterDTO(tx, c);
+    }
     let op;
     if (body.text !== undefined && body.stroke === undefined) {
       const n = splitChars(body.text).length;
@@ -310,15 +319,25 @@ export async function appendEnvelope(
       op = { kind: 'stroke', stroke: { pen: s.pen, color: s.color, pts: s.pts.map((p) => p.map((v) => Math.round(v * 1e4) / 1e4)) } };
     } else fail(400, 'BAD_REQUEST', 'text 與 stroke 要剛好給一個');
     const cnt = await tx.select({ seq: envelopeOps.seq }).from(envelopeOps).where(eq(envelopeOps.letterId, c.letterId));
-    await tx.insert(envelopeOps).values({ letterId: c.letterId, seq: cnt.length, zone: body.zone, op, createdAt: ctx.clock.date() });
+    await tx.insert(envelopeOps).values({ letterId: c.letterId, seq: cnt.length, zone: body.zone, op, opId: opId ?? null, createdAt: ctx.clock.date() });
     return counterDTO(tx, c);
   });
 }
 
 /** 摺一次：伺服器重算外框，最多 6 次，摺了就回不去 */
-export async function fold(ctx: Ctx, userId: string, letterId: string, edge: FoldEdge, at: number): Promise<CounterDTO> {
+export async function fold(ctx: Ctx, userId: string, letterId: string, edge: FoldEdge, at: number, opIdIn?: string): Promise<CounterDTO> {
   return ctx.db.transaction(async (tx) => {
     const { c } = await atCounter(ctx, tx, userId, letterId);
+    // 同一個 opId 已經摺過：不再多摺一次（review 低）
+    const opId = opIdIn?.toLowerCase();
+    if (opId) {
+      const done = await tx
+        .insert(counterOps)
+        .values({ letterId: c.letterId, opId, createdAt: ctx.clock.date() })
+        .onConflictDoNothing()
+        .returning({ opId: counterOps.opId });
+      if (!done.length) return counterDTO(tx, c);
+    }
     if (c.env === 'card' || !c.pack) fail(422, 'INVALID_OP', '明信片不用摺');
     if (c.inserted) fail(409, 'ALREADY_DONE', '信已經在信封裡了');
     const folds = c.folds as Fold[];

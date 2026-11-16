@@ -8,6 +8,7 @@ import type { Ctx } from '../context.ts';
 import { loginTokens, sessions, users } from '../db/schema.ts';
 import { EMAIL_RE, normEmail, randomToken, sha256 } from '../lib/crypto.ts';
 import { fail } from '../lib/errors.ts';
+import { flushMail } from './jobs.ts';
 import { magicLinkMail } from './mails.ts';
 
 /** 登入與 session 的有效期限用真實時間，不受開發用「快轉」影響（否則快轉 30 天就被登出） */
@@ -30,9 +31,11 @@ export async function requestMagicLink(ctx: Ctx, rawEmail: string): Promise<void
       createdAt: new Date(now),
     });
     const m = magicLinkMail({ link: `${ctx.cfg.appUrl}/login?token=${token}`, minutes: MAGIC_TTL_MIN });
+    // token 只放開發用本機信箱的 meta（測試與本機信箱頁要用）；正式環境的 outbox 不存 meta（review M12）
     await ctx.mailer.send({ to: email, ...m, idempotencyKey: `login:${sha256(token)}`, meta: { kind: 'login', token } }, tx, now);
   });
-  // TODO：同一個信箱／IP 的請求頻率限制
+  // 交易成功後馬上寄出（登入信要快）；寄信失敗不影響回應，worker 之後會重試。頻率限制在路由層（routes/auth.ts）
+  await flushMail(ctx);
 }
 
 /** 用登入連結換 session。回傳 session token（放進 cookie） */

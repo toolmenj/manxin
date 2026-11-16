@@ -36,11 +36,40 @@ import type {
   Stroke,
   TombDTO,
   TrackDTO,
+  InboxDTO,
+  SheetDeltaDTO,
   TravelMode,
   TripDTO,
   UserDTO,
   WriteMode,
 } from '@manxin/shared';
+
+export type ReportReason = 'harass' | 'spam' | 'threat' | 'other';
+export interface AdminReport {
+  id: string;
+  no: string;
+  reason: ReportReason;
+  note: string;
+  status: 'open' | 'dismissed' | 'suspended';
+  createdAt: number;
+  sender: { id: string; email: string; reports: number; suspended: boolean };
+  reporter: string;
+}
+export interface AdminStats {
+  users: { total: number; last24h: number; suspended: number };
+  reports: { open: number };
+  letters: Record<string, number>;
+  shipments: { total: number; inTransit: number; waiting: number; signed: number; returned: number; last24h: number };
+  jobs: Record<string, number>;
+  mails: Record<string, number>;
+  mailer: string;
+  storage: { files: number; fileBytes: number; dbBytes: number };
+  serverTime: number;
+}
+export interface AdminFailures {
+  jobs: { id: number; kind: string; status: string; attempts: number; lastError: string | null; runAt: number }[];
+  mails: { id: number; kind: string; to: string; status: string; attempts: number; lastError: string | null; nextAttemptAt: number }[];
+}
 
 export const API_BASE = '/api';
 
@@ -105,7 +134,28 @@ export async function request<T>(method: string, path: string, body?: Body): Pro
 const get = <T>(p: string) => request<T>('GET', p);
 const post = <T>(p: string, b?: Body) => request<T>('POST', p, b);
 const patch = <T>(p: string, b: Body) => request<T>('PATCH', p, b);
+const put = <T>(p: string, b: Body) => request<T>('PUT', p, b);
+const del = <T>(p: string, b?: Body) => request<T>('DELETE', p, b);
 const enc = encodeURIComponent;
+
+/** 操作 id（UUID） */
+const newId = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16));
+
+/** 網路斷掉（請求可能已經到了伺服器、只是回應沒回來）就用同一個 opId 再送一次 */
+async function retryNet<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'NETWORK') {
+      await new Promise((r) => setTimeout(r, 800));
+      return f();
+    }
+    throw e;
+  }
+}
 
 /** 後端回傳的檔案網址（/attachments/:id、/r/:token/attachments/:id）加上 /api 前綴 */
 export const fileUrl = (url: string): string => (url.startsWith(API_BASE + '/') ? url : API_BASE + url);
@@ -159,7 +209,7 @@ const metaOf = (m?: AppendMeta | number): AppendMeta => {
 
 export const api = {
   /* 帳號 */
-  me: () => get<{ user: UserDTO }>('/me'),
+  me: () => get<{ user: UserDTO; admin?: boolean }>('/me'),
   magicLink: (email: string) => post<{ ok: true }>('/auth/magic-link', { email }),
   verify: (token: string) => post<{ user: UserDTO }>('/auth/verify', { token }),
   logout: () => post<void>('/auth/logout'),
@@ -176,12 +226,17 @@ export const api = {
   patchSheet: (id: string, b: SheetSettings) => patch<SheetDTO>(`/letters/${id}/sheet`, b),
 
   /* 信紙內容：只有追加 */
-  appendChars: (id: string, text: string, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/chars`, { text, ...metaOf(meta) }),
+  /** delta=true：只回這一筆操作（SheetDeltaDTO），重送等特殊情況才回整張信紙（review M5） */
+  appendChars: <D extends boolean = false>(id: string, text: string, meta?: AppendMeta | number, delta?: D) =>
+    post<D extends true ? SheetDTO | SheetDeltaDTO : SheetDTO>(`/letters/${id}/sheet/chars${delta ? '?delta=1' : ''}`, { text, ...metaOf(meta) }),
   /** at：要塗改的字（第幾個字）的清單 */
-  appendMark: (id: string, at: number[], tool: MarkTool, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/marks`, { at, tool, ...metaOf(meta) }),
+  appendMark: <D extends boolean = false>(id: string, at: number[], tool: MarkTool, meta?: AppendMeta | number, delta?: D) =>
+    post<D extends true ? SheetDTO | SheetDeltaDTO : SheetDTO>(`/letters/${id}/sheet/marks${delta ? '?delta=1' : ''}`, { at, tool, ...metaOf(meta) }),
   /** 移動打字頭（不寫字、不蓋字） */
-  appendMove: (id: string, at: Cell, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/moves`, { at, ...metaOf(meta) }),
-  appendStroke: (id: string, stroke: Stroke, meta?: AppendMeta | number) => post<SheetDTO>(`/letters/${id}/sheet/strokes`, { stroke, ...metaOf(meta) }),
+  appendMove: <D extends boolean = false>(id: string, at: Cell, meta?: AppendMeta | number, delta?: D) =>
+    post<D extends true ? SheetDTO | SheetDeltaDTO : SheetDTO>(`/letters/${id}/sheet/moves${delta ? '?delta=1' : ''}`, { at, ...metaOf(meta) }),
+  appendStroke: <D extends boolean = false>(id: string, stroke: Stroke, meta?: AppendMeta | number, delta?: D) =>
+    post<D extends true ? SheetDTO | SheetDeltaDTO : SheetDTO>(`/letters/${id}/sheet/strokes${delta ? '?delta=1' : ''}`, { stroke, ...metaOf(meta) }),
   scan: (id: string, attachmentId: string) => post<SheetDTO>(`/letters/${id}/sheet/scan`, { attachmentId }),
 
   transcribe: (id: string) => post<LetterDTO>(`/letters/${id}/transcribe`),
@@ -218,9 +273,12 @@ export const api = {
   counter: (id: string) => get<CounterDTO>(`/letters/${id}/counter`),
   patchCounter: (id: string, b: CounterPatch) => patch<CounterDTO>(`/letters/${id}/counter`, b),
   confirmAddress: (id: string) => post<CounterDTO>(`/letters/${id}/counter/confirm-address`),
-  envelopeText: (id: string, zone: 'from' | 'to', text: string) => post<CounterDTO>(`/letters/${id}/counter/envelope-text`, { zone, text }),
-  envelopeStroke: (id: string, zone: 'from' | 'to', stroke: Stroke) => post<CounterDTO>(`/letters/${id}/counter/envelope-text`, { zone, stroke }),
-  fold: (id: string, edge: FoldEdge, at: number) => post<CounterDTO>(`/letters/${id}/counter/folds`, { edge, at }),
+  /** opId：同一個動作重送時帶一樣的，伺服器只算一次（網路斷掉自動重送一次） */
+  envelopeText: (id: string, zone: 'from' | 'to', text: string, opId = newId()) =>
+    retryNet(() => post<CounterDTO>(`/letters/${id}/counter/envelope-text`, { zone, text, opId })),
+  envelopeStroke: (id: string, zone: 'from' | 'to', stroke: Stroke, opId = newId()) =>
+    retryNet(() => post<CounterDTO>(`/letters/${id}/counter/envelope-text`, { zone, stroke, opId })),
+  fold: (id: string, edge: FoldEdge, at: number, opId = newId()) => retryNet(() => post<CounterDTO>(`/letters/${id}/counter/folds`, { edge, at, opId })),
   insert: (id: string) => post<CounterDTO>(`/letters/${id}/counter/insert`),
   seal: (id: string) => post<CounterDTO>(`/letters/${id}/counter/seal`),
   stamp: (id: string, p: Pos) => post<CounterDTO>(`/letters/${id}/counter/stamp`, { x: p.x, y: p.y, r: p.r }),
@@ -233,10 +291,41 @@ export const api = {
   shipment: (no: string) => get<ShipmentDTO>(`/shipments/${enc(no)}`),
   editRecipientEmail: (no: string, email: string) => post<ShipmentDTO>(`/shipments/${enc(no)}/recipient-email`, { email }),
   collection: () => get<CollectionDTO>('/collection'),
+  /** 收藏重看（D-025）：登入就拿得到這封信的開信連結 */
+  collectionLink: (no: string) => get<{ link: string }>(`/collection/${enc(no)}`),
+  /** 收件匣（D-024）：寄給目前登入信箱、已送達的信 */
+  inbox: () => get<InboxDTO>('/inbox'),
+  /* ---- 帳號 ---- */
+  publicConfig: () => get<{ contactEmail: string | null }>('/public/config'),
+  /** D-034：偏好跟著帳號走 */
+  getPrefs: () => get<{ prefs: Record<string, unknown> | null; updatedAt: number | null }>('/me/prefs'),
+  putPrefs: (prefs: Record<string, unknown>) => put<{ ok: true; updatedAt: number }>('/me/prefs', { prefs }),
+  logoutAll: () => post<void>('/auth/logout-all'),
+  closeAccount: (confirmEmail: string) => del<void>('/me', { confirmEmail }),
+  blocks: () => get<{ blocks: { id: string; senderName: string; createdAt: number }[] }>('/blocks'),
+  unblock: (id: string) => del<{ ok: true }>(`/blocks/${enc(id)}`),
+  /** D-036：刪掉沒用到的字型 */
+  dropFont: (id: string) => del<{ ok: true }>(`/fonts/${enc(id)}`),
+  /** 管理頁（只有 ADMIN_EMAILS 用得到；只有數字與狀態） */
+  admin: {
+    reports: () => get<{ reports: AdminReport[] }>('/admin/reports'),
+    dismissReport: (id: string) => post<{ ok: true }>(`/admin/reports/${enc(id)}/dismiss`),
+    suspend: (userId: string) => post<{ ok: true }>(`/admin/users/${enc(userId)}/suspend`),
+    unsuspend: (userId: string) => post<{ ok: true }>(`/admin/users/${enc(userId)}/unsuspend`),
+    stats: () => get<AdminStats>('/admin/stats'),
+    failures: () => get<AdminFailures>('/admin/failures'),
+    retryJob: (id: number) => post<{ ok: true }>(`/admin/jobs/${id}/retry`),
+    retryMail: (id: number) => post<{ ok: true }>(`/admin/mails/${id}/retry`),
+  },
 
   /* 收信（不需要登入） */
   recv: (token: string) => get<ReceiveDTO>(`/r/${enc(token)}`),
   recvEnter: (token: string) => post<ReceiveDTO>(`/r/${enc(token)}/enter`),
+  /** 收件人：不再收這個人的信 */
+  recvBlock: (token: string) => post<{ ok: true }>(`/r/${enc(token)}/block`),
+  /** 收件人：檢舉這封信（block=true 同時封鎖） */
+  recvReport: (token: string, reason: ReportReason, note: string, block: boolean) =>
+    post<{ ok: true }>(`/r/${enc(token)}/report`, { reason, ...(note ? { note } : {}), block }),
   recvOpen: (token: string, method: 'knife' | 'tear', cutPath?: string) =>
     post<ReceiveDTO>(`/r/${enc(token)}/open`, cutPath ? { method, cutPath: cutPath.slice(0, 4000) } : { method }),
   recvTear: (token: string, x: number) => post<ReceiveDTO>(`/r/${enc(token)}/tear`, { x: Math.min(1, Math.max(0, x)) }),

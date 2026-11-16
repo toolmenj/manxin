@@ -78,6 +78,11 @@ export {
   type SheetContent,
   type SheetOp,
 } from '@manxin/engine/sheet';
+import type { SheetOp as EngineSheetOp } from '@manxin/engine/sheet';
+
+/** 內建字型（前端 FONTS 的鍵）。伺服器只接受這幾個，或自己上傳的 f:<id> */
+export const BUILTIN_FONTS = ['typewriter', 'lead', 'ming', 'kai', 'song'] as const;
+export type BuiltinFont = (typeof BUILTIN_FONTS)[number];
 
 /* ---------- 錯誤 ---------- */
 
@@ -118,6 +123,7 @@ export type ErrorCode =
   | 'INVALID_OP'
   | 'INVALID_STATE'
   | 'DEV_ONLY'
+  | 'RATE_LIMITED'
   | 'INTERNAL';
 
 export interface ApiError {
@@ -215,6 +221,8 @@ export interface LetterDTO {
   askedAt: number | null;
   /** 先放著的信：是否到了該問「現在想寄出了嗎？」的時候 */
   askDue: boolean;
+  /** 下一次詢問的時間（先放著的信才有）；畫面上的「幾天後再問」用這個算，不自己套 30 天規則 */
+  askAt: number | null;
   trip: TripDTO | null;
 }
 
@@ -304,6 +312,8 @@ export interface ShipmentDTO {
   state: ShipState;
   curEmail: string;
   curDeliver: number;
+  /** 已經寄過 48 小時未簽收提醒（追蹤頁用，不比對事件文字） */
+  reminded48: boolean;
   editsLeft: number;
   reached: number;
   stops: string[];
@@ -349,6 +359,24 @@ export interface ReceiveDTO {
 
 /* ---------- 收藏 ---------- */
 
+/** 收件匣（D-024）：寄給我（目前登入信箱）而且已經送達的信 */
+export interface InboxItemDTO {
+  no: string;
+  fromName: string;
+  sentAt: number;
+  postcard: boolean;
+  /** 已簽收（打開或撕開） */
+  signed: boolean;
+  opened: boolean;
+  /** 開信連結（站內路徑 /r/:token） */
+  link: string;
+}
+export interface InboxDTO {
+  letters: InboxItemDTO[];
+  /** 還沒拆的封數（頁首數字用） */
+  unopened: number;
+}
+
 export interface CollectionDTO {
   letters: { no: string; fromName: string; at: number; torn: boolean }[];
   stamps: { no: string; stamp: StampId; stampAttachmentId: string | null; fiber: boolean; fromName: string; at: number }[];
@@ -363,6 +391,19 @@ export interface CollectionDTO {
  * - sheetId：客戶端認為目前的信紙，換過紙（謄抄）回 409 SHEET_CHANGED
  * - opId：客戶端產生的 UUID。同一張信紙上已經有這個 opId 就不再寫一次，直接回目前的信紙（200）——回應遺失後重送不會重複
  */
+/**
+ * 精簡回應（review M5）：追加時帶 ?delta=1，伺服器只回這一筆實際寫進去的操作，不回整張信紙。
+ * 前端用同一套規則（applyOp）自己套上去。opId 重送等特殊情況仍回完整的 SheetDTO（沒有 delta 欄位）。
+ */
+export interface SheetDeltaDTO {
+  delta: true;
+  /** 信紙 id */
+  id: string;
+  /** 寫入後的追加次數 */
+  seq: number;
+  op: EngineSheetOp;
+}
+
 export interface AppendMeta {
   seq?: number;
   sheetId?: string;

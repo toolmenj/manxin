@@ -80,21 +80,21 @@ export async function postRoutes(app: FastifyInstance) {
       confirmAddress(ctx, user(req).id, req.params.id),
     );
 
-    r.post<IdP & { Body: { zone: 'from' | 'to'; text?: string; stroke?: never } }>(
+    r.post<IdP & { Body: { zone: 'from' | 'to'; text?: string; stroke?: never; opId?: string } }>(
       '/letters/:id/counter/envelope-text',
       {
         schema: {
           params: uuidParam(),
-          body: obj({ zone: enm('from', 'to'), text: str({ minLength: 1, maxLength: 400 }), stroke: strokeSchema }, ['zone']),
+          body: obj({ zone: enm('from', 'to'), text: str({ minLength: 1, maxLength: 400 }), stroke: strokeSchema, opId: str({ pattern: '^[0-9a-fA-F-]{36}$' }) }, ['zone']),
         },
       },
       async (req, reply) => reply.status(201).send(await appendEnvelope(ctx, user(req).id, req.params.id, req.body)),
     );
 
-    r.post<IdP & { Body: { edge: 't' | 'b' | 'l' | 'r'; at: number } }>(
+    r.post<IdP & { Body: { edge: 't' | 'b' | 'l' | 'r'; at: number; opId?: string } }>(
       '/letters/:id/counter/folds',
-      { schema: { params: uuidParam(), body: obj({ edge: enm('t', 'b', 'l', 'r'), at: num() }, ['edge', 'at']) } },
-      async (req, reply) => reply.status(201).send(await fold(ctx, user(req).id, req.params.id, req.body.edge, req.body.at)),
+      { schema: { params: uuidParam(), body: obj({ edge: enm('t', 'b', 'l', 'r'), at: num(), opId: str({ pattern: '^[0-9a-fA-F-]{36}$' }) }, ['edge', 'at']) } },
+      async (req, reply) => reply.status(201).send(await fold(ctx, user(req).id, req.params.id, req.body.edge, req.body.at, req.body.opId)),
     );
 
     r.post<IdP>('/letters/:id/counter/insert', { schema: { params: uuidParam() } }, async (req) => insertLetter(ctx, user(req).id, req.params.id));

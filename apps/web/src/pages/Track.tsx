@@ -43,7 +43,8 @@ export function TrackPage() {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 60_000);
+    // 分頁在背景時不輪詢（review M14）
+    const t = setInterval(() => document.visibilityState === 'visible' && void load(), 60_000);
     return () => clearInterval(t);
   }, [load, app.timeVersion]);
 
@@ -253,7 +254,7 @@ function ShipDetail({ ship, onShip }: { ship: ShipmentDTO; onShip: (s: ShipmentD
     }
   };
 
-  const remindLast = ship.events.some((e) => e.tx.startsWith('送達 48 小時無人簽收'));
+  const remindLast = ship.reminded48;
 
   return (
     <div className="detail">

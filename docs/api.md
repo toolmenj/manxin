@@ -5,6 +5,7 @@
 
 ## 通則
 
+- **正式環境所有 API 在 `/api` 底下**（例如 `/api/letters`），前端網頁與 API 同一個網址；開發時 Vite proxy 去掉 `/api` 前綴，所以本文件的路徑都不含 `/api`。探針 `/healthz`（程序活著）、`/readyz`（含資料庫）不在前綴底下。
 - REST + JSON。時間一律是 **epoch 毫秒**（number）；伺服器一律以 **Asia/Taipei** 計算，前端顯示時再轉民國紀年。
 - 「現在幾點」一律以伺服器為準（`GET /time`）。前端時鐘只拿來畫倒數。
 - 登入用 cookie `mx_session`（httpOnly、SameSite=Lax、正式環境 Secure）。標「需登入」的端點沒登入回 401。
@@ -46,6 +47,9 @@
 | 422 | `TOO_WIDE` / `TOO_LONG` | 信紙塞不進信封（`details` 有寬高與信封內徑） |
 | 422 | `FOLD_OUT_OF_RANGE` | 摺線不在信紙上 |
 | 422 | `NOT_READY` | 寄出前條件不齊，`details.missing`：`ADDRESS`、`INSERT`、`SEAL`、`STAMP` |
+| 403 | `FORBIDDEN` | 從別的網站送來的狀態變更（Origin／Sec-Fetch-Site）；開信連結已綁定別的瀏覽器（`details.reason: OTHER_BROWSER`，D-029） |
+| 415 | `BAD_REQUEST` | 狀態變更用了 JSON 與 multipart 以外的格式（例如 text/plain 表單） |
+| 429 | `RATE_LIMITED` | 太頻繁，帶 `Retry-After` 標頭與 `details.retryAfterSec` |
 | 500 | `INTERNAL` | 伺服器錯誤 |
 
 ### 主要資料型別
@@ -270,3 +274,102 @@ worker 每 30 秒（`WORKER_INTERVAL_MS`）輪詢一次到期的工作。`unique
 | POST | `/dev/worker/run` | — | 立刻跑一次排程 |
 
 也可以用環境變數 `DEV_CLOCK_OFFSET_MS` 設定啟動時的偏移。正式環境偏移永遠是 0。
+
+## 11. 上線版新增與變更（2026-11-12，launch 分支）
+
+### 收件匣與收藏重看（需登入，D-024、D-025）
+
+| 方法 | 路徑 | 輸出 | 錯誤 |
+|---|---|---|---|
+| GET | `/inbox` | `InboxDTO { letters: InboxItemDTO[], unopened }`。寄給目前登入信箱、已送達、沒退回、沒改寄到別處的信；`link` 是開信連結 `/r/:token` | 401 |
+| GET | `/collection/:no` | `{ link }`：收藏裡的這封信的開信連結 | 404（收藏裡沒有） |
+| GET | `/me` | 多了 `admin: boolean`（只用來顯示管理頁入口） | 401 |
+
+### 收信的變更
+
+- **D-030**：打開 `/r/:token` 本身不算點開；前端要使用者按「收下這封信」才送 `POST /r/:token/enter`（明信片 enter 就是簽收）。登入連結頁也要按「登入慢信」才呼叫 `/auth/verify`。
+- **D-029**：第一次在開信連結上做動作（enter、open、tear…）的瀏覽器會被記住（cookie `mx_rb`）。之後的動作只限那台瀏覽器，或用收件信箱登入的人；其他人 `GET /r/:token` 還是看得到，動作回 403 `FORBIDDEN`（`OTHER_BROWSER`）。
+
+### 公開追蹤（D-031）
+
+`GET /track/:no` 只回狀態與沒有地點的物流事件：`office` 是空字串、`stops` 是空陣列、事件的 `pl` 是空字串、沒有簽收與改寄事件。完整明細給寄件人 `GET /shipments/:no`。
+
+### 書寫的精簡回應（review M5）
+
+`POST /letters/:id/sheet/{chars,marks,moves,strokes}?delta=1`：第一次寫入只回 `SheetDeltaDTO { delta: true, id, seq, op }`（這一筆實際寫進去的操作），前端用 `applyOp` 接上去；opId 重送仍回 200 與完整的 `SheetDTO`。不帶 `delta` 的行為不變。
+
+### 頻率限制（review H9）
+
+| 端點 | 限制 |
+|---|---|
+| `POST /auth/magic-link` | 同一個信箱每小時 5 次、同一個 IP 每小時 30 次 |
+| `POST /auth/verify` | 同一個 IP 每 10 分鐘 30 次 |
+| `GET /track/:no` | 同一個 IP 每 10 分鐘 60 次 |
+| `/r/:token` 底下全部 | 同一個 IP 每 10 分鐘 600 次 |
+| 上傳附件、字型 | 每個帳號每小時 120 次 |
+| `POST /shipments/:no/recipient-email` | 每個帳號每小時 10 次 |
+
+### 上傳
+
+只收依檔頭判斷的 PNG、JPEG、WebP、GIF（不收 SVG），存下來的 `mime` 是判斷出來的類型。讀取檔案一律帶 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: sandbox`。
+
+### 管理頁（ADMIN_EMAILS，D-040）
+
+不是管理員一律 404。只有數字與狀態，看不到信件內容；信箱遮掉一半。
+
+| 方法 | 路徑 | 輸出 |
+|---|---|---|
+| GET | `/admin/stats` | 使用者、信件狀態、寄件（路上／已送達未簽收／已簽收／已退回）、排程與寄信各狀態數量、資料庫大小 |
+| GET | `/admin/failures` | 失敗或重試中的排程與寄信（種類、次數、錯誤原因） |
+| POST | `/admin/jobs/:id/retry` | 失敗的排程重新排入 |
+| POST | `/admin/mails/:id/retry` | 寄不出去的信重新寄 |
+
+## 12. 防騷擾、帳號、字型與其他（2026-11-12 第二輪）
+
+### 寄信上限與停權（D-042）
+
+`POST /letters/:id/post` 多了兩種錯誤：
+- 429 `RATE_LIMITED`：`details.reason` 是 `DAILY_LIMIT`（24 小時內已寄 5 封）或 `SAME_RECIPIENT`（24 小時內已寄過這個收件信箱）。上限由 `SEND_LIMIT_PER_DAY`、`SEND_LIMIT_PER_RECIPIENT` 設定。
+- 403 `FORBIDDEN`：`details.reason` 是 `SUSPENDED`（被停權）。
+
+寄件人信箱一律用登入的帳號信箱（寄出時伺服器覆蓋 `env.fromEmail`）。
+
+### 收件人：封鎖、檢舉（只有收件人本人，見 D-029）
+
+| 方法 | 路徑 | 輸入 | 說明 |
+|---|---|---|---|
+| POST | `/r/:token/block` | — | 不再收這個寄件人的信。之後寄來的信不寄通知、不進收件匣；寄件人那邊照常，30 天後退回 |
+| POST | `/r/:token/report` | `{ reason: 'harass'\|'spam'\|'threat'\|'other', note?, block? }` | 檢舉；`block: true` 同時封鎖 |
+
+非本人回 403 `FORBIDDEN`（`OTHER_BROWSER`）。
+
+### 帳號（需登入）
+
+| 方法 | 路徑 | 輸入 | 輸出 |
+|---|---|---|---|
+| GET | `/me/prefs` | — | `{ prefs, updatedAt }`（D-034，沒存過是 `null`） |
+| PUT | `/me/prefs` | `{ prefs: object }`（上限 4 KB） | `{ ok, updatedAt }`；太大 413 |
+| POST | `/auth/logout-all` | — | 204，所有裝置的登入都失效 |
+| DELETE | `/me` | `{ confirmEmail }`（要等於自己的信箱） | 204（D-043）；信箱不對 422 `INVALID_EMAIL` |
+| GET | `/blocks` | — | `{ blocks: [{ id, senderName, createdAt }] }` |
+| DELETE | `/blocks/:id` | — | 解除封鎖 |
+| GET | `/public/config` | — | `{ contactEmail }`（不用登入，隱私權政策頁用） |
+
+### 字型與上傳
+
+- `DELETE /fonts/:id`（D-036）：任何信紙或寄出的信封用到就 409 `CONFLICT`（`FONT_IN_USE`）。
+- 信紙字型 `font` 只收內建的 `typewriter`、`lead`、`ming`、`kai`、`song`，或自己上傳的 `f:<id>`，其他 422。
+- 容量（review M13）：每人上傳總量 300 MB（超過 413，`details.reason: QUOTA`）；一封信最多 20 個檔案（409 `TOO_MANY_FILES`）。
+- 寄件人出門前「拿出來」的附件，收件人讀不到（404）。
+
+### 櫃台防重送
+
+`POST /letters/:id/counter/envelope-text` 與 `/counter/folds` 可以帶 `opId`（UUID）。同一個 `opId` 已經做過就不再做一次，回目前的櫃台狀態。
+
+### 其他
+
+- `LetterDTO.askAt`：先放著的信下一次詢問的時間（畫面不再自己算 30 天）。
+- `ShipmentDTO.reminded48`：已經寄過 48 小時未簽收提醒。
+- 管理頁：`GET /admin/reports`、`POST /admin/reports/:id/dismiss`、`POST /admin/users/:id/suspend`、`/unsuspend`；`/admin/stats` 多了 `users.suspended`、`reports.open`。
+- 天氣（D-022）：設定 `CWA_API_KEY` 就用中央氣象署一週預報（F-D0047-091），超過一週或取不到時用模擬天氣。
+

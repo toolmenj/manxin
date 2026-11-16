@@ -48,7 +48,7 @@ export function MailboxPage() {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 5000);
+    const t = setInterval(() => document.visibilityState === 'visible' && void load(), 5000);
     return () => clearInterval(t);
   }, [load, app.timeVersion]);
 

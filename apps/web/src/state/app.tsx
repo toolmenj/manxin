@@ -5,7 +5,7 @@ import type { UserDTO } from '@manxin/shared';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, isApiError } from '../api/client.ts';
 import { anim } from '../lib/motion.ts';
-import { loadPrefs, savePrefs, type Prefs } from '../lib/prefs.ts';
+import { loadPrefs, sanitizePrefs, savePrefs, type Prefs } from '../lib/prefs.ts';
 import type { Era } from '../lib/time.ts';
 
 export interface ModalSpec {
@@ -27,6 +27,8 @@ export interface Counts {
 export interface AppState {
   user: UserDTO | null;
   userLoading: boolean;
+  /** 目前登入的是管理員（ADMIN_EMAILS）。只用來顯示管理頁入口，權限在後端檢查 */
+  admin: boolean;
   setUser: (u: UserDTO | null) => void;
   prefs: Prefs;
   setPrefs: (p: Partial<Prefs>) => void;
@@ -68,6 +70,22 @@ function applyDocPrefs(p: Prefs) {
 export function AppProvider({ children, initialUser }: { children: ReactNode; initialUser?: UserDTO | null }) {
   const [user, setUser] = useState<UserDTO | null>(initialUser ?? null);
   const [userLoading, setUserLoading] = useState(initialUser === undefined);
+  const [admin, setAdmin] = useState(false);
+  const uid = user?.id ?? null;
+  useEffect(() => {
+    if (!uid) {
+      setAdmin(false);
+      return;
+    }
+    let alive = true;
+    api
+      .me()
+      .then((r) => alive && setAdmin(!!r.admin))
+      .catch(() => alive && setAdmin(false));
+    return () => {
+      alive = false;
+    };
+  }, [uid]);
   const [prefs, setPrefsState] = useState<Prefs>(() => loadPrefs());
   const skew = useRef(0);
   const [devOffset, setDevOffset] = useState<number | null>(null);
@@ -90,10 +108,41 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
       .finally(() => setUserLoading(false));
   }, [initialUser]);
 
+  /*
+   * D-034：偏好跟著帳號走。登入後先讀伺服器上的（有就蓋過這台的；沒有就把這台的存上去），
+   * 之後改偏好停 1 秒再存回伺服器（連點不會每下都送）。
+   */
+  const prefsSynced = useRef<string | null>(null);
+  const prefsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    prefsSynced.current = null;
+    if (!uid) return;
+    let alive = true;
+    api
+      .getPrefs()
+      .then((r) => {
+        if (!alive) return;
+        if (r.prefs) {
+          const n = sanitizePrefs(r.prefs);
+          savePrefs(n);
+          setPrefsState(n);
+        } else void api.putPrefs(loadPrefs() as unknown as Record<string, unknown>).catch(() => undefined);
+        prefsSynced.current = uid;
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [uid]);
+
   const setPrefs = useCallback((p: Partial<Prefs>) => {
     setPrefsState((old) => {
       const n = { ...old, ...p };
       savePrefs(n);
+      if (prefsSynced.current) {
+        if (prefsTimer.current) clearTimeout(prefsTimer.current);
+        prefsTimer.current = setTimeout(() => void api.putPrefs(n as unknown as Record<string, unknown>).catch(() => undefined), 1000);
+      }
       return n;
     });
   }, []);
@@ -149,7 +198,7 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
 
   useEffect(() => {
     void syncTime();
-    const t = setInterval(() => void syncTime(), 60_000);
+    const t = setInterval(() => document.visibilityState === 'visible' && void syncTime(), 60_000);
     return () => clearInterval(t);
   }, [syncTime]);
 
@@ -183,7 +232,10 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
       api.shipments().catch(() => null),
       api.tomb().catch(() => null),
       api.collection().catch(() => null),
-      unopenedCount(user.email).catch(() => 0),
+      api
+        .inbox()
+        .then((r) => r.unopened)
+        .catch(() => 0),
     ]);
     setCounts({
       track: sh?.shipments.length ?? 0,
@@ -197,12 +249,25 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
     void refreshCounts();
   }, [refreshCounts, timeVersion]);
 
+  // 收件匣、追蹤的數字每分鐘更新一次；分頁在背景時不更新（review M14）
+  useEffect(() => {
+    if (!user) return;
+    const t = setInterval(() => document.visibilityState === 'visible' && void refreshCounts(), 60_000);
+    const onVis = () => document.visibilityState === 'visible' && void refreshCounts();
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [user, refreshCounts]);
+
   const bumpTime = useCallback(() => setTimeVersion((v) => v + 1), []);
 
   const value = useMemo<AppState>(
     () => ({
       user,
       userLoading,
+      admin,
       setUser,
       prefs,
       setPrefs,
@@ -220,7 +285,7 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
       timeVersion,
       bumpTime,
     }),
-    [user, userLoading, prefs, setPrefs, switchEra, now, syncTime, devOffset, toast, nag, modal, closeModal, counts, refreshCounts, timeVersion, bumpTime],
+    [user, userLoading, admin, prefs, setPrefs, switchEra, now, syncTime, devOffset, toast, nag, modal, closeModal, counts, refreshCounts, timeVersion, bumpTime],
   );
 
   return (
@@ -233,23 +298,6 @@ export function AppProvider({ children, initialUser }: { children: ReactNode; in
   );
 }
 
-/** 寄給這個信箱、還沒拆的信（開發環境從本機信箱找開信通知） */
-async function unopenedCount(email: string): Promise<number> {
-  const links = await deliveryLinks(email);
-  let n = 0;
-  await Promise.all(
-    links.map(async (l) => {
-      try {
-        const r = await api.recv(l.token);
-        if (!r.recv.opened) n++;
-      } catch {
-        /* 連結失效（改寄、退回）就不算 */
-      }
-    }),
-  );
-  return n;
-}
-
 export interface DeliveryLink {
   token: string;
   no: string;
@@ -259,7 +307,7 @@ export interface DeliveryLink {
   text: string;
 }
 
-/** 本機信箱（GET /dev/outbox）裡寄給某個信箱的開信通知；正式環境沒有這個端點，回傳空陣列 */
+/** 開發用：本機信箱（GET /dev/outbox）裡寄給某個信箱的開信通知；正式環境沒有這個端點，回傳空陣列 */
 export async function deliveryLinks(email: string): Promise<DeliveryLink[]> {
   try {
     const r = await api.dev.outbox(email.toLowerCase(), 200);

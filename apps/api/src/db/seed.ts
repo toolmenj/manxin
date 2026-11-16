@@ -169,7 +169,8 @@ export async function seed(db: Db, cfg: Config): Promise<{ created: boolean; ope
 }
 
 // 直接執行：npm run db:seed
-if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[1]?.endsWith('seed.ts')) {
+// 只看檔名：打包成單一檔案（dist/server.mjs）後 import.meta.url 會等於主程式，不能拿來判斷
+if (/[\\/]seed\.ts$/.test(process.argv[1] ?? '')) {
   const { connect } = await import('./client.ts');
   const cfg = loadConfig();
   if (cfg.dbDriver === 'pglite') {

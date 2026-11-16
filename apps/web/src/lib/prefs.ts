@@ -35,8 +35,17 @@ export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
+    return sanitizePrefs(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+/** 從 localStorage 或伺服器（D-034）讀進來的偏好：不認得的值換回預設 */
+export function sanitizePrefs(raw: unknown): Prefs {
+  {
     // trayMirror（字盤的「看反字」）是舊版欄位，字盤移除後丟掉
-    const { trayMirror: _old, ...p } = JSON.parse(raw) as Partial<Prefs> & { trayMirror?: unknown };
+    const { trayMirror: _old, ...p } = (raw && typeof raw === 'object' ? raw : {}) as Partial<Prefs> & { trayMirror?: unknown };
     return {
       ...DEFAULT_PREFS,
       ...p,
@@ -46,8 +55,6 @@ export function loadPrefs(): Prefs {
       pen: { ...DEFAULT_PREFS.pen, ...(p.pen ?? {}) },
       postSel: { ...DEFAULT_PREFS.postSel, ...(p.postSel ?? {}) },
     };
-  } catch {
-    return { ...DEFAULT_PREFS };
   }
 }
 
@@ -86,6 +93,15 @@ export function rememberToken(no: string, token: string): void {
     const m = JSON.parse(localStorage.getItem(RKEY) || '{}') as Record<string, string>;
     m[no] = token;
     localStorage.setItem(RKEY, JSON.stringify(m));
+  } catch {
+    /* 略過 */
+  }
+}
+
+/** 登出時清掉（共用電腦上下一個人不該看到上一個人的信，review M11） */
+export function forgetTokens(): void {
+  try {
+    localStorage.removeItem(RKEY);
   } catch {
     /* 略過 */
   }

@@ -1,0 +1,28 @@
+# 不是秘密的設定。秘密（密碼、密鑰）放 secret.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: manxin-config
+data:
+  # 網站網址（https，不含結尾斜線）。登入信、開信連結都用這個網址
+  APP_URL: "https://manxin.example.tw"
+  # 寄件人顯示名稱。Gmail 只能用你登入的那個信箱寄，名稱可以自訂
+  MAIL_FROM: "慢信 <your-account@gmail.com>" # ← 改成寄信用的 Gmail
+  MAILER: "smtp"
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "465"
+  SMTP_SECURE: "true"
+  # 管理員信箱（逗號分隔）。用這些信箱登入才看得到 /admin
+  ADMIN_EMAILS: "admin@example.com" # ← 改成你的信箱
+  # 隱私權政策、使用條款上公開的聯絡信箱（必填）
+  CONTACT_EMAIL: "hello@example.com" # ← 改成要公開的聯絡信箱
+  # 中央氣象署授權碼放 secret.yaml 的 CWA_API_KEY；沒填就用模擬天氣
+  STORAGE: "db"
+  # 前面有 Ingress，要用 X-Forwarded-For 判斷使用者 IP（頻率限制用）
+  TRUST_PROXY: "true"
+  DB_POOL_MAX: "10"
+  WORKER_INTERVAL_MS: "30000"
+  # 上傳上限：圖片 10 MB、字型 20 MB（Ingress 的 proxy-body-size 要比這個大）
+  UPLOAD_MAX_BYTES: "10485760"
+  FONT_MAX_BYTES: "20971520"
+  WEATHER_PROVIDER: "mock"

@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+**/uploads
+**/.pglite
+.git
+.env
+.env.*
+!.env.example
+*.log
+docs
+prototype
+deploy
+CLAUDE.local.md
+.claude

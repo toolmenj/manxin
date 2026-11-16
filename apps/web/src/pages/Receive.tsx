@@ -6,7 +6,7 @@
 import type { Piece, ReceiveDTO } from '@manxin/shared';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { api, isApiError, recvAttachmentUrl } from '../api/client.ts';
+import { api, isApiError, type ReportReason, recvAttachmentUrl } from '../api/client.ts';
 import { Empty, SheetThumb } from '../components/common.tsx';
 import { FlipCard } from '../components/DeskModals.tsx';
 import { ENVS, envBackHTML, envFrontHTML, paintZones, type ViewPkg } from '../lib/art.ts';
@@ -173,16 +173,13 @@ function ReceiveView({ token }: { token: string }) {
     [toast],
   );
 
-  // 點開連結就算「打開連結」（明信片一進來就算打開，也就是簽收）
+  // D-030：打開連結本身不算數，要使用者按一下「收下」才算點開（明信片按下去就是簽收）。
+  // 郵件安全掃描器會自動打開信裡的連結，不能讓它替收件人簽收。
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        let d = await api.recv(token);
-        if (!d.recv.entered) {
-          d = await api.recvEnter(token);
-          if (d.recv.opened) void app.refreshCounts();
-        }
+        const d = await api.recv(token);
         rememberToken(d.no, token);
         if (alive) setDto(d);
       } catch (e) {
@@ -237,13 +234,14 @@ function ReceiveView({ token }: { token: string }) {
 
   /* 第一次看到這封信（還沒拆）：信輕輕落到桌上。只是表現，不擋任何操作 */
   useEffect(() => {
-    if (!dto || arrived.current) return;
+    // 收下（entered）之後信封才出現在桌上
+    if (!dto || !dto.recv.entered || arrived.current) return;
     arrived.current = true;
     if (dto.recv.opened || dto.recv.torn) return;
     const h = envRef.current;
     if (h) void arriveLetter(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dto ? 1 : 0]);
+  }, [dto ? (dto.recv.entered ? 2 : 1) : 0]);
 
   /* ---------- 倒出來的東西、攤開的信 ---------- */
   const outKey = dto ? JSON.stringify([r?.poured, r?.unfolded, dto.attachments?.length, !!sheet, avail]) : '';
@@ -538,6 +536,35 @@ function ReceiveView({ token }: { token: string }) {
     );
   if (!dto || !pk || !r) return <p className="hint" ref={wrapRef as never}>打開信箱…</p>;
 
+  if (!r.entered) {
+    const take = async () => {
+      try {
+        const d = await api.recvEnter(token);
+        setDto(d);
+        if (d.recv.opened) void app.refreshCounts();
+      } catch (e) {
+        fail(e);
+      }
+    };
+    return (
+      <div className="rv-table" ref={wrapRef}>
+        <div className="rv-head">
+          <span className="h2" style={{ fontSize: 20 }}>
+            {dto.fromName || '有個人'}寄來的{pc ? '明信片' : '信'}
+          </span>
+          <span className="hint">{spaced(dto.no)}</span>
+        </div>
+        <div className="empty">
+          <p>郵差把{pc ? '明信片' : '信'}放進你的信箱了。</p>
+          {pc && <p className="hint">明信片沒有信封，收下就算簽收。</p>}
+          <button type="button" className="btn primary" id="rvTake" onClick={() => void take()}>
+            收下{pc ? '明信片' : '這封信'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const T: React.ReactNode[] = [];
   if (pc) {
     T.push(
@@ -646,7 +673,97 @@ function ReceiveView({ token }: { token: string }) {
         </>
       )}
       <div className="rv-tools">{T}</div>
+      <TroubleBox token={token} fromName={dto.fromName} />
     </div>
+  );
+}
+
+const REASONS: [ReportReason, string][] = [
+  ['harass', '騷擾、糾纏'],
+  ['threat', '威脅、恐嚇'],
+  ['spam', '廣告、詐騙'],
+  ['other', '其他'],
+];
+
+/** 這封信有問題：不再收這個人的信、檢舉（收件人本人才能做，見 D-029） */
+function TroubleBox({ token, fromName }: { token: string; fromName: string }) {
+  const app = useApp();
+  const [mode, setMode] = useState<'idle' | 'report' | 'done'>('idle');
+  const [reason, setReason] = useState<ReportReason>('harass');
+  const [note, setNote] = useState('');
+  const [alsoBlock, setAlsoBlock] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const who = fromName || '這個人';
+
+  const block = async () => {
+    if (!confirm(`不再收${who}寄來的信？之後${who}寄的信都不會送到你這裡，對方不會知道。可以到「帳號設定」解除。`)) return;
+    setBusy(true);
+    try {
+      await api.recvBlock(token);
+      app.toast(`封鎖了。之後不會再收到${who}寄來的信。`);
+      setMode('done');
+    } catch (e) {
+      app.toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const report = async () => {
+    setBusy(true);
+    try {
+      await api.recvReport(token, reason, note.trim(), alsoBlock);
+      app.toast('收到你的檢舉了，我們會處理。管理員看不到信的內容，只看得到你選的原因與說明。');
+      setMode('done');
+    } catch (e) {
+      app.toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (mode === 'done') return <p className="hint rv-trouble">已經處理了。</p>;
+  return (
+    <details className="rv-trouble">
+      <summary>這封信讓你不舒服？</summary>
+      {mode === 'idle' ? (
+        <div className="row">
+          <button type="button" className="btn small" id="rvBlock" disabled={busy} onClick={() => void block()}>
+            不再收{who}的信
+          </button>
+          <button type="button" className="btn small ghost" id="rvReport" onClick={() => setMode('report')}>
+            檢舉
+          </button>
+        </div>
+      ) : (
+        <div className="rv-report">
+          <label className="field">
+            <span>原因</span>
+            <select value={reason} onChange={(e) => setReason(e.target.value as ReportReason)}>
+              {REASONS.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>補充說明（選填，管理員看得到這段，看不到信的內容）</span>
+            <textarea rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <label>
+            <input type="checkbox" checked={alsoBlock} onChange={(e) => setAlsoBlock(e.target.checked)} /> 同時不再收{who}的信
+          </label>
+          <div className="row">
+            <button type="button" className="btn small primary" disabled={busy} onClick={() => void report()}>
+              送出檢舉
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setMode('idle')}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+    </details>
   );
 }
 

@@ -50,6 +50,15 @@ npm run dev:all
 
 更多細節見 [apps/web/README.md](apps/web/README.md)、[apps/api/README.md](apps/api/README.md)。
 
+## 上線（部署）
+
+網站上有隱私權政策（`/privacy`）與使用條款（`/terms`），內容寫在 `apps/web/src/pages/Legal.tsx`，改功能時要一起改。
+
+正式環境用自己架的 Kubernetes（KubeSphere 也可以），設定與步驟見 [deploy/README.md](deploy/README.md)。
+不用叢集也能在自己電腦把正式版整套跑起來驗證：`docker compose -f deploy/docker-compose.prod.yml up --build`。
+
+注意：只有 `NODE_ENV=development` 或 `test` 才是開發環境（`npm run dev*` 已經帶好）。沒設 NODE_ENV 一律當正式環境，缺設定就拒絕啟動。
+
 ## 測試
 
 ```bash
@@ -57,7 +66,7 @@ npm test          # 物流時間引擎 + API
 npm run typecheck
 ```
 
-API 測試預設用 PGlite。目前還沒在真正的 PostgreSQL 16 上跑過。
+API 測試預設用 PGlite。設定 `TEST_DATABASE_URL` 就改用真的 PostgreSQL 16，並多跑併發測試（`apps/api/test/concurrency.test.ts`）；GitHub Actions 的 CI（`.github/workflows/ci.yml`）兩種都跑。
 
 ## 專案結構
 

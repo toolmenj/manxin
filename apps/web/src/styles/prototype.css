@@ -29,6 +29,7 @@ body{background:var(--desk);color:var(--ink);font:15px/1.65 var(--ui)}
 button,input,select,textarea{font:inherit;color:inherit}
 h1,h2,h3{text-wrap:balance;margin:0}
 :focus-visible{outline:2px solid var(--post);outline-offset:2px}
+::selection{background:color-mix(in srgb,var(--post) 26%,var(--paper));color:var(--ink)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media (max-width:560px){.envform{grid-template-columns:1fr}}
 
@@ -72,6 +73,7 @@ main{max-width:1320px;margin:0 auto;padding-block:20px 72px;padding-inline:16px}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button[aria-pressed="true"]{background:var(--post);color:var(--post-ink)}
 .seg button:disabled{opacity:.4;cursor:not-allowed}
+.seg button:disabled[aria-pressed="true"]{opacity:.8}
 select{padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface)}
 .alert{background:var(--warn-bg);color:var(--warn-ink);border-radius:8px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
 .alert p{margin:0}
@@ -467,6 +469,7 @@ body::before{content:"";position:fixed;inset:0;z-index:89;pointer-events:none;mi
   .actbar .sp{display:none}
   .actbar .btn{flex:1 1 auto}
   .actbar #btnEnv{flex-basis:100%}
+  .deco-lamp{display:none}
   .fixbar .hint{margin-left:0!important;width:100%}
   .envform{grid-template-columns:1fr}
   .opts{gap:10px}
@@ -664,7 +667,10 @@ body::before{content:"";position:fixed;inset:0;z-index:89;pointer-events:none;mi
 :root[data-desk="white"] :is(.stage,.ct-table,.rv-table){background:linear-gradient(rgba(255,255,255,.85),rgba(255,255,255,0) 32%),linear-gradient(#F4F4F1,#E1E1DD);box-shadow:inset 0 0 0 1px #CFCFCA,0 8px 20px rgba(0,0,0,.18)}
 :root[data-desk="school"] :is(.stage,.ct-table,.rv-table){background:repeating-linear-gradient(88deg,rgba(120,80,30,.07) 0 3px,transparent 3px 11px),linear-gradient(#DDBE8C,#CDAA74);box-shadow:inset 0 0 0 6px #6C8574,inset 0 0 0 7px #3E5446,0 10px 0 #4F6556,0 18px 22px rgba(0,0,0,.3)}
 .desk-deco{position:absolute;pointer-events:none;z-index:-1}
-.deco-lamp{right:-6px;top:-48px;width:100px;height:100px}
+.deco-lamp{right:-6px;top:-26px;width:100px;height:100px}
+/* 檯燈佔著書桌右上角，按鈕列讓出位子，免得「裝進信封」把燈罩壓掉一半 */
+:root[data-desk="wood"] .stage .actbar{padding-right:76px}
+@media (max-width:700px){:root[data-desk="wood"] .stage .actbar{padding-right:0}}
 .deco-strip{left:6%;right:6%;top:-5px;height:8px;border-radius:4px;background:#fff;box-shadow:0 0 10px 3px rgba(255,255,255,.95),0 0 44px 14px rgba(255,255,255,.45)}
 .deco-groove{left:8%;right:8%;top:9px;height:9px;border-radius:5px;background:linear-gradient(#9C7A48,#C9A56E);box-shadow:inset 0 2px 3px rgba(0,0,0,.35)}
 .deco-scratch{right:18px;bottom:12px;font:15px var(--hand);color:rgba(90,60,25,.4);transform:rotate(-7deg);letter-spacing:.1em}

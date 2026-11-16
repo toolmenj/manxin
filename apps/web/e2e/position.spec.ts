@@ -14,6 +14,8 @@ async function login(page: Page, email: string) {
   const r = await (await page.request.get(`${API}/dev/outbox?to=${encodeURIComponent(email)}`)).json();
   const token = r.mails.find((m: { meta: { kind: string } }) => m.meta.kind === 'login').meta.token;
   await page.goto('/login?token=' + token);
+  // D-030：登入連結要按一下才登入（郵件掃描器打開連結不會把它用掉）
+  await page.getByRole('button', { name: '登入慢信' }).click();
   await page.waitForURL('**/desk');
 }
 

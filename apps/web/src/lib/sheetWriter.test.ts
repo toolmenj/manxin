@@ -318,3 +318,45 @@ describe('移動打字頭', () => {
     expect(w.pending).toBe(0);
   });
 });
+
+describe('SheetWriter：精簡回應（review M5）', () => {
+  /** 包一層：第一次寫入只回 delta（帶伺服器存下的操作），重送才回整張 */
+  function deltaServer(start = sheet()) {
+    const srv = fakeServer(start);
+    let reloads = 0;
+    const send = vi.fn(async (op: WireOp, meta: SendMeta) => {
+      const before = srv.get();
+      const full = await srv.send(op, meta);
+      if (full.seq === before.seq) return full; // 重送：整張
+      const stored = op.kind === 'mark' ? { ...op, g: `srv-${before.seq}` } : op;
+      return { delta: true as const, id: full.id, seq: full.seq, op: stored as never };
+    });
+    return { srv, send, reload: async () => (reloads++, srv.get()), reloads: () => reloads };
+  }
+
+  it('收到 delta 就自己接上去，畫面跟伺服器一樣，不用重新讀整張', async () => {
+    const d = deltaServer();
+    const w = new SheetWriter(d.srv.get(), { send: d.send, reload: d.reload, onChange: () => {}, onError: () => {}, sleep: async () => {} });
+    w.push({ kind: 'chars', text: '好久' });
+    await w.flush();
+    w.push({ kind: 'chars', text: '不見' });
+    await w.flush();
+    expect(textOf(w.display())).toBe('好久不見');
+    expect(w.display().seq).toBe(d.srv.get().seq);
+    expect(w.display().chars).toEqual(d.srv.get().chars);
+    expect(d.reloads()).toBe(0);
+  });
+
+  it('delta 的 seq 接不上（中間有別的分頁寫過）就重新讀整張', async () => {
+    const d = deltaServer();
+    const send = vi.fn(async (op: WireOp, meta: SendMeta) => {
+      const r = await d.send(op, meta);
+      return 'delta' in r ? { ...r, seq: r.seq + 5 } : r;
+    });
+    const w = new SheetWriter(d.srv.get(), { send, reload: d.reload, onChange: () => {}, onError: () => {}, sleep: async () => {} });
+    w.push({ kind: 'chars', text: 'a' });
+    await w.flush();
+    expect(d.reloads()).toBe(1);
+    expect(textOf(w.display())).toBe('a');
+  });
+});

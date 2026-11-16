@@ -78,3 +78,43 @@
 .scene:has(.pb-stage){background:radial-gradient(ellipse 80% 70% at 50% 42%,rgba(40,28,12,.62),rgba(10,7,3,.95) 78%)}
 /* 「略過」在每個年代都要看得到（民國的 .btn 是透明底，疊在暗色場景上幾乎看不見） */
 .scene .btn.skip{background:rgba(255,250,236,.9);color:#2A2620;border-color:rgba(42,38,32,.6);z-index:5}
+/* 信紙範本縮圖：四張一排，選到的那張像抽出來一點；鎖住後仍看得出哪張是目前這張 */
+.tpl-grid{display:grid;grid-template-columns:repeat(4,44px);gap:8px 6px}
+.tpl{width:44px;height:62px;padding:0;border:1px solid var(--line);border-radius:2px;background:var(--paper) center / cover no-repeat;box-shadow:0 1px 0 rgba(0,0,0,.08);cursor:pointer;transition:transform .35s cubic-bezier(.4,0,.2,1),box-shadow .35s}
+.tpl:hover{transform:translateY(-2px);box-shadow:0 3px 6px rgba(0,0,0,.18)}
+.tpl[aria-pressed="true"]{border-color:var(--post);box-shadow:0 0 0 2px var(--post),2px 3px 0 rgba(0,0,0,.2);transform:rotate(-2deg)}
+.tpl:disabled{cursor:not-allowed;opacity:.5;transform:none;box-shadow:none}
+.tpl:disabled[aria-pressed="true"]{opacity:.9;box-shadow:0 0 0 2px var(--post)}
+:root[data-era="doodle"] .tpl,:root[data-era="map"] .tpl{border-width:2px}
+
+/* 管理頁的表格（只有數字與狀態） */
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th, .admin-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.admin-table th { font-weight: 600; }
+
+/* 頁尾、帳號設定、隱私權政策與使用條款 */
+.site-foot { text-align: center; padding: 24px 16px 32px; font-size: 13px; opacity: 0.75; }
+.site-foot a { color: inherit; }
+.legal { max-width: 760px; margin: 0 auto; padding: 24px 28px; line-height: 1.8; }
+.legal h3 { margin: 20px 0 6px; font-size: 17px; }
+.legal ul { padding-left: 1.4em; }
+.account { max-width: 760px; margin: 0 auto; display: grid; gap: 14px; }
+.plain-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.plain-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.field { display: grid; gap: 4px; margin: 10px 0; max-width: 360px; }
+.field input, .field select, .field textarea { font: inherit; padding: 6px 8px; }
+.danger-zone { border: 1px solid var(--seal); }
+.btn.danger { background: var(--seal); color: var(--seal-ink); border-color: var(--seal); }
+.btn.danger:disabled { opacity: 0.45; }
+.rv-trouble { margin: 18px auto 0; max-width: 520px; font-size: 14px; }
+.rv-trouble summary { cursor: pointer; opacity: 0.8; }
+.rv-trouble .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.font-manage { margin-top: 6px; font-size: 13px; }
+/* D-012：民國風格的直式中式信封（朱紅框、中間一條紅格寫收件人） */
+.pb-mail.vert{width:28px;height:46px;background:var(--paper);border:1.5px solid var(--seal)}
+.pb-mail.vert::before{content:"";position:absolute;left:50%;top:6px;bottom:6px;width:8px;transform:translateX(-50%);border:1px solid var(--seal)}
+.pb-mail.vert.ours{background:var(--paper)}
+.pb-mail.vert.ours::after{right:3px;top:3px;width:7px;height:9px}
+/* 民國風格的按鈕是透明底、墨色字，放在收信的深色木桌上看不清楚：桌上的按鈕改用紙色底 */
+:root[data-era="minguo"] .rv-table .btn:not(.primary):not(.red):not(.danger){background:var(--paper);color:var(--ink)}
+:root[data-era="minguo"] .rv-table .rv-trouble summary{color:var(--paper)}

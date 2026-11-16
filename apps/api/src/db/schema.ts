@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigserial,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -19,11 +20,69 @@ import {
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
+/** PostgreSQL bytea ↔ Node Buffer */
+const bytea = customType<{ data: Buffer; driverData: Buffer | Uint8Array }>({
+  dataType: () => 'bytea',
+  fromDriver: (v) => (Buffer.isBuffer(v) ? v : Buffer.from(v)),
+});
+
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   email: text('email').notNull().unique(),
   createdAt: ts('created_at').notNull(),
+  /** 管理員停權（檢舉成立）：不能再寄信 */
+  suspendedAt: ts('suspended_at'),
+  /** 使用者刪除帳號：email 改成 deleted:<id>，寄出的信留給收件人 */
+  deletedAt: ts('deleted_at'),
 });
+
+/** 個人偏好跟著帳號走（D-034）：年代風格、書桌、2D/3D 等，換裝置也一樣 */
+export const userPrefs = pgTable('user_prefs', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  prefs: jsonb('prefs').notNull(),
+  updatedAt: ts('updated_at').notNull(),
+});
+
+/** 收件人封鎖寄件人：之後這個人寄來的信不會送到（寄件人那邊照常顯示運送中，30 天後退回） */
+export const blocks = pgTable(
+  'blocks',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    recipientEmail: text('recipient_email').notNull(),
+    senderUserId: uuid('sender_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 封鎖時那封信的寄件人名稱（給收件人看封鎖名單用） */
+    senderName: text('sender_name').notNull(),
+    createdAt: ts('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('blocks_pair_uq').on(t.recipientEmail, t.senderUserId)],
+);
+
+/** 檢舉（收件人從開信頁送出）。管理員只看得到理由與次數，看不到信件內容 */
+export const reports = pgTable(
+  'reports',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    shipmentId: uuid('shipment_id')
+      .notNull()
+      .references(() => shipments.id, { onDelete: 'cascade' }),
+    senderUserId: uuid('sender_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    reporterEmail: text('reporter_email').notNull(),
+    /** harass 騷擾／spam 廣告／threat 威脅／other 其他 */
+    reason: text('reason').notNull(),
+    note: text('note').notNull().default(''),
+    /** open 待處理／dismissed 不成立／suspended 已停權 */
+    status: text('status').notNull().default('open'),
+    createdAt: ts('created_at').notNull(),
+    handledAt: ts('handled_at'),
+  },
+  (t) => [uniqueIndex('reports_one_per_shipment').on(t.shipmentId, t.reporterEmail), index('reports_status_idx').on(t.status)],
+);
 
 export const loginTokens = pgTable('login_tokens', {
   tokenHash: text('token_hash').primaryKey(),
@@ -85,6 +144,12 @@ export const sheets = pgTable(
     discardState: text('discard_state'),
     discardAngle: integer('discard_angle'),
     discardedAt: ts('discarded_at'),
+    /**
+     * 內容快照（review M5）：前 snapshotSeq 筆操作重放後的結果。追加時只重放快照之後的操作，
+     * 不用每寫一筆就從頭重放整張。快照只是快取，刪掉也能從 sheet_ops 重算。
+     */
+    snapshot: jsonb('snapshot'),
+    snapshotSeq: integer('snapshot_seq').notNull().default(0),
   },
   (t) => [index('sheets_letter_idx').on(t.letterId, t.role), index('sheets_user_role_idx').on(t.userId, t.role)],
 );
@@ -209,9 +274,11 @@ export const envelopeOps = pgTable(
     seq: integer('seq').notNull(),
     zone: text('zone').notNull(),
     op: jsonb('op').notNull(),
+    /** 客戶端產生的操作 id：連點、重送不會寫兩次 */
+    opId: uuid('op_id'),
     createdAt: ts('created_at').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.letterId, t.seq] })],
+  (t) => [primaryKey({ columns: [t.letterId, t.seq] }), uniqueIndex('envelope_ops_op_id_uq').on(t.letterId, t.opId)],
 );
 
 export const shipments = pgTable(
@@ -241,9 +308,13 @@ export const shipments = pgTable(
     /** 目前有效的開信連結（雜湊）。改寄或退信後清空 */
     recipientTokenHash: text('recipient_token_hash').unique(),
     deliverySeq: integer('delivery_seq').notNull().default(-1),
+    /** 目前投遞的收件信箱（送達時寫入，小寫）。收件匣用它找信（D-024） */
+    recipientEmail: text('recipient_email'),
+    /** 第一次打開開信連結的瀏覽器（cookie 的雜湊）。拆信、撕信等動作限這台瀏覽器或登入的收件人（D-029） */
+    recvBindHash: text('recv_bind_hash'),
     createdAt: ts('created_at').notNull(),
   },
-  (t) => [index('shipments_user_idx').on(t.userId)],
+  (t) => [index('shipments_user_idx').on(t.userId), index('shipments_recipient_idx').on(t.recipientEmail)],
 );
 
 export const emailEdits = pgTable(
@@ -300,6 +371,60 @@ export const scheduledJobs = pgTable(
     doneAt: ts('done_at'),
   },
   (t) => [index('scheduled_jobs_due_idx').on(t.status, t.runAt)],
+);
+
+/**
+ * 正式環境的待寄信件（outbox 模式，review H7）。
+ * 交易裡只寫這張表；交易成功之後才由寄信程序透過 SMTP 寄出，外部服務慢或失敗都不會鎖住資料列。
+ * idempotency_key 唯一：同一件事只排一封。寄出後清掉內文（內文含登入／開信連結，review M12）。
+ */
+export const emailOutbox = pgTable(
+  'email_outbox',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    toEmail: text('to_email').notNull(),
+    subject: text('subject').notNull(),
+    text: text('text'),
+    kind: text('kind').notNull().default(''),
+    /** pending 待寄／sending 寄送中／sent 已寄／failed 放棄 */
+    status: text('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: ts('next_attempt_at').notNull(),
+    claimedAt: ts('claimed_at'),
+    lastError: text('last_error'),
+    createdAt: ts('created_at').notNull(),
+    sentAt: ts('sent_at'),
+  },
+  (t) => [index('email_outbox_due_idx').on(t.status, t.nextAttemptAt)],
+);
+
+/** 檔案內容（STORAGE=db）。附件、信紙圖樣、自訂字型都存在這裡，多個 API 副本共用 */
+export const blobs = pgTable('blobs', {
+  key: text('key').primaryKey(),
+  data: bytea('data').notNull(),
+  size: integer('size').notNull(),
+  createdAt: ts('created_at').notNull(),
+});
+
+/** 頻率限制計數（固定時間窗）。存在資料庫，多個 API 副本共用同一份計數 */
+export const rateLimits = pgTable('rate_limits', {
+  key: text('key').primaryKey(),
+  windowStart: ts('window_start').notNull(),
+  count: integer('count').notNull(),
+});
+
+/** 櫃台上做過的動作（摺信）的操作 id：連點、重送不會多摺一次 */
+export const counterOps = pgTable(
+  'counter_ops',
+  {
+    letterId: uuid('letter_id')
+      .notNull()
+      .references(() => letters.id, { onDelete: 'cascade' }),
+    opId: uuid('op_id').notNull(),
+    createdAt: ts('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.letterId, t.opId] })],
 );
 
 /** ConsoleMailer 的本機信箱（GET /dev/outbox） */

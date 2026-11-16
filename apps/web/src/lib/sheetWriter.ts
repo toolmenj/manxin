@@ -23,6 +23,7 @@ import {
   type MarkTool,
   type PaperRef,
   type SheetContent,
+  type SheetDeltaDTO,
   type SheetDTO,
   type SheetOp,
   type Stroke,
@@ -48,7 +49,8 @@ export interface SendMeta {
 export type WriterStatus = 'idle' | 'saving' | 'retrying';
 
 export interface WriterDeps {
-  send: (op: WireOp, meta: SendMeta) => Promise<SheetDTO>;
+  /** 回整張信紙，或只回這一筆操作（SheetDeltaDTO，review M5） */
+  send: (op: WireOp, meta: SendMeta) => Promise<SheetDTO | SheetDeltaDTO>;
   reload: () => Promise<SheetDTO>;
   onChange: (display: SheetDTO, status: WriterStatus) => void;
   onError: (msg: string) => void;
@@ -94,6 +96,12 @@ type AnyLocal = LocalOp | { kind: 'mark'; from: number; to: number; tool: MarkTo
 export function applyLocal(sh: SheetDTO, op: AnyLocal, n = 0): SheetDTO {
   const e: SheetOp = op.kind === 'mark' ? { ...op, g: `local-${n}` } : op;
   const c = applyOp(contentOf(sh), e, paperOfSheet(sh));
+  return { ...sh, chars: c.chars, strokes: c.strokes, scan: c.scan, cursor: c.cursor };
+}
+
+/** 套用伺服器回傳、已經寫進去的操作（不改 g 等欄位，跟伺服器重放完全一致） */
+function applyServerOp(sh: SheetDTO, op: SheetOp): SheetDTO {
+  const c = applyOp(contentOf(sh), op, paperOfSheet(sh));
   return { ...sh, chars: c.chars, strokes: c.strokes, scan: c.scan, cursor: c.cursor };
 }
 
@@ -340,7 +348,14 @@ export class SheetWriter {
         }
         this.setStatus('saving');
         try {
-          const sh = await this.deps.send(wire, { seq: pre.seq, sheetId: pre.id, opId: it.id });
+          const res = await this.deps.send(wire, { seq: pre.seq, sheetId: pre.id, opId: it.id });
+          // 精簡回應：伺服器只回寫進去的那一筆，用同一套規則接在 pre 後面（結果跟伺服器重放一模一樣）
+          const sh: SheetDTO =
+            'delta' in res
+              ? res.id === pre.id && res.seq === pre.seq + 1
+                ? { ...applyServerOp(pre, res.op), seq: res.seq }
+                : await this.deps.reload()
+              : res;
           if (sh.id !== pre.id) {
             this.sheetChanged(sh);
             continue;

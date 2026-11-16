@@ -54,7 +54,7 @@ export function counterPkg(c: CounterDTO): ViewPkg {
 
 const ADDR_FIELDS: [keyof EnvAddress, string, string][] = [
   ['fromName', '名字（選填）', 'text'],
-  ['fromEmail', '電子信箱（提醒和退信會寄到這裡）', 'email'],
+  ['fromEmail', '電子信箱（就是你登入的信箱；提醒和退信會寄到這裡）', 'email'],
   ['fromAddr', '實體地址（選填，大概就好）', 'text'],
   ['toName', '名字（選填）', 'text'],
   ['toEmail', '電子信箱', 'email'],
@@ -210,12 +210,15 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
       ev,
       e,
       ev.innerHTML,
-      async (cx, cy, g) => {
+      async (cx, cy, g, px, py) => {
         const pbx = $('#ctBox .pbx'),
           slit = $('#ctBox .slit');
         if (!pbx || !slit) return false;
-        const b = slit.getBoundingClientRect();
-        if (cx < b.left - 50 || cx > b.right + 50 || cy < b.top - 80 || cy > b.bottom + 80) return false;
+        // 信封很大：手指（滑鼠）放在郵筒上，或信封中心落在郵筒上，都算投進去（郵筒外圍再寬 40px）
+        const b = pbx.getBoundingClientRect(),
+          M = 40;
+        const onBox = (x: number, y: number) => x >= b.left - M && x <= b.right + M && y >= b.top - M && y <= b.bottom + M;
+        if (!onBox(px, py) && !onBox(cx, cy)) return false;
         // 先送出，動畫同時播（動畫只是表現，不等它）
         const posting = api.postLetter(id).then(
           (s) => ({ ok: true as const, s }),
@@ -826,9 +829,14 @@ export function Counter({ letter, trip, onLetter, reload }: { letter: LetterDTO;
             {[0, 1].map((g) => (
               <div className="grp" key={g}>
                 <span className="hint">{g ? '收件人' : '寄件人'}</span>
-                {ADDR_FIELDS.slice(g * 3, g * 3 + 3).map(([k, ph, type]) => (
-                  <input key={k} data-k={k} type={type} value={env[k]} placeholder={ph} autoComplete="off" onChange={(e) => saveEnv(k, e.target.value)} />
-                ))}
+                {ADDR_FIELDS.slice(g * 3, g * 3 + 3).map(([k, ph, type]) =>
+                  // 寄件人信箱一律是登入的帳號信箱（伺服器寄出時也會用它），不能改
+                  k === 'fromEmail' ? (
+                    <input key={k} data-k={k} type={type} value={app.user?.email ?? env[k]} readOnly title="寄件人信箱就是你登入的信箱" />
+                  ) : (
+                    <input key={k} data-k={k} type={type} value={env[k]} placeholder={ph} autoComplete="off" onChange={(e) => saveEnv(k, e.target.value)} />
+                  ),
+                )}
               </div>
             ))}
           </div>

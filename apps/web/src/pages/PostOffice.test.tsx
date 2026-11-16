@@ -88,6 +88,7 @@ describe('郵局', () => {
 
 const ship = (o: Partial<ShipmentDTO> = {}): ShipmentDTO => ({
   no: 'RR123456785TW',
+  reminded48: false,
   letterId: 'L',
   sentAt: NOW - 3 * 86400e3,
   office: '巷口郵筒',

@@ -29,6 +29,7 @@ import { normEmail, roll, sha256 } from '../lib/crypto.ts';
 import { fail } from '../lib/errors.ts';
 import { customFontId, fontById, recvFontUrl } from './fonts.ts';
 import { attachmentDTO, currentSheet, sheetDTO } from './letters.ts';
+import { blockSender, reportShipment, type ReportReason } from './abuse.ts';
 import { editsOf, statusInput, type Pkg, type ShipmentRow } from './shipments.ts';
 
 async function byToken(db: Db, token: string, lock = false): Promise<ShipmentRow> {
@@ -116,10 +117,29 @@ const RECV_MESSAGES: Record<string, string> = {
   INVALID_PIECES: '碎片資料不正確',
 };
 
-export async function receiveAction(ctx: Ctx, token: string, a: RecvAction): Promise<ReceiveDTO> {
+/** 誰在操作：這台瀏覽器的識別（cookie）與登入的信箱 */
+export interface Actor {
+  browserId: string;
+  email: string | null;
+}
+
+/**
+ * D-029：第一次在開信連結上動手的瀏覽器會被記下來。之後拆信、撕信、撬郵票等動作，
+ * 只有那台瀏覽器或用收件信箱登入的人可以做；連結被轉寄出去，別人只能看、不能動（review M9）。
+ */
+function assertActor(s: ShipmentRow, who: Actor): Partial<ShipmentRow> {
+  const h = sha256(`recv-browser:${who.browserId}`);
+  if (!s.recvBindHash) return { recvBindHash: h };
+  if (s.recvBindHash === h) return {};
+  if (who.email && s.recipientEmail && normEmail(who.email) === s.recipientEmail) return {};
+  return fail(403, 'FORBIDDEN', '這封信已經在另一個瀏覽器打開了。請回到那台裝置，或用收件信箱登入後從收件匣打開。', { reason: 'OTHER_BROWSER' });
+}
+
+export async function receiveAction(ctx: Ctx, token: string, a: RecvAction, who: Actor): Promise<ReceiveDTO> {
   return ctx.db.transaction(async (tx) => {
     const s = await byToken(tx, token, true);
     const st = assertOpenable(ctx, s, await editsOf(tx, s.id));
+    const bind = assertActor(s, who);
     const pkg = s.pkg as Pkg;
     const env = pkg.env as EnvelopeKind;
     const r0 = s.recv as RecvState;
@@ -157,7 +177,7 @@ export async function receiveAction(ctx: Ctx, token: string, a: RecvAction): Pro
         break;
     }
     if (!r.ok) fail(409, 'INVALID_STATE', RECV_MESSAGES[r.code] ?? r.code, { reason: r.code });
-    const patch: Partial<ShipmentRow> = { recv: r.state };
+    const patch: Partial<ShipmentRow> = { recv: r.state, ...bind };
     if (r.signs && !s.signedAt) patch.signedAt = new Date(now);
     await tx.update(shipments).set(patch).where(eq(shipments.id, s.id));
     // 收藏屬於收件信箱
@@ -180,6 +200,8 @@ export async function recipientAttachment(ctx: Ctx, token: string, attId: string
     .where(and(eq(attachments.id, attId), eq(attachments.letterId, s.letterId)));
   const a = rows[0];
   if (!a || !['attachment', 'front', 'bg', 'scan', 'stamp', 'postmark', 'skin'].includes(a.purpose)) fail(404, 'NOT_FOUND', '找不到這個檔案');
+  // 寄件人出門前「拿出來」的附件不在信封裡，收件人讀不到（review 低）
+  if (a!.takenOutAt) fail(404, 'NOT_FOUND', '找不到這個檔案');
   // 信封外面看得到的（上傳的郵票、郵戳、信封圖）一開始就能看；信封裡的東西要倒出來之後
   if (!['stamp', 'postmark', 'skin'].includes(a!.purpose) && !(s.recv as RecvState).poured) fail(409, 'INVALID_STATE', '附件還在信封裡');
   return a!;
@@ -222,4 +244,41 @@ export async function getCollection(ctx: Ctx, email: string): Promise<Collection
     } else out.waxes.push({ no: s.no, fiber: i.fiber, fromName, at });
   }
   return out;
+}
+
+/** 收件人本人才能封鎖、檢舉：第一次動手的那台瀏覽器，或用收件信箱登入的人（D-029） */
+async function asRecipient(ctx: Ctx, db: Db, token: string, who: Actor) {
+  const s = await byToken(db, token, true);
+  assertOpenable(ctx, s, await editsOf(db, s.id));
+  const h = sha256(`recv-browser:${who.browserId}`);
+  const byLogin = !!who.email && !!s.recipientEmail && normEmail(who.email) === s.recipientEmail;
+  if (!byLogin && s.recvBindHash !== h) {
+    fail(403, 'FORBIDDEN', '只有收件人本人可以這樣做。請用收件信箱登入，或回到第一次打開這封信的裝置。', { reason: 'OTHER_BROWSER' });
+  }
+  if (!s.recipientEmail) fail(409, 'INVALID_STATE', '這封信還沒送到');
+  return s;
+}
+
+/** 不再收這個人的信 */
+export async function blockFromLetter(ctx: Ctx, token: string, who: Actor): Promise<{ ok: true }> {
+  return ctx.db.transaction(async (tx) => {
+    const s = await asRecipient(ctx, tx, token, who);
+    await blockSender(tx, s, s.recipientEmail!, ctx.clock.now());
+    return { ok: true as const };
+  });
+}
+
+export async function reportFromLetter(
+  ctx: Ctx,
+  token: string,
+  who: Actor,
+  body: { reason: ReportReason; note?: string; block?: boolean },
+): Promise<{ ok: true }> {
+  return ctx.db.transaction(async (tx) => {
+    const s = await asRecipient(ctx, tx, token, who);
+    const now = ctx.clock.now();
+    await reportShipment(tx, s, s.recipientEmail!, body.reason, body.note ?? '', now);
+    if (body.block) await blockSender(tx, s, s.recipientEmail!, now);
+    return { ok: true as const };
+  });
 }
